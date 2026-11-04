@@ -4,6 +4,8 @@
   const frame = document.getElementById('phone') || document.body;
   if (new URLSearchParams(location.search).get('fill')) {
     frame.style.cssText = 'width:100vw;height:100vh;max-width:none;max-height:none;aspect-ratio:auto;border-radius:0';
+    const note = document.getElementById('note');
+    if (note) note.style.display = 'none';
   }
   const rectOf = () => frame.getBoundingClientRect();
   // The game sizes itself once at launch, so later touches are mapped back to that original size.

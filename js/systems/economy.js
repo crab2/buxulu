@@ -164,6 +164,11 @@ function clearNode(s, nodeId) {
   return { litStar, first: !was };
 }
 
+// The seventh star has no boss. It lights only if the player turns the handle in the final choice.
+function starsLit(s) {
+  return s.progress.stars + (s.progress.ending === 'turn' ? 1 : 0);
+}
+
 function starsForBoss(nodeId) {
   const { ci, ni, chapter } = NODE_INDEX[nodeId];
   if (ci < 5) return ci + 1;
@@ -262,6 +267,6 @@ function relicOwner(s, uid) {
 
 module.exports = {
   defaultSave, upgrade, addDust, addItems, canAfford, spend, applyGrants, addXp, battleRewards, addSpirits, joinHero,
-  nodeUnlocked, chapterCleared, clearNode, claimChest, lightGate, gateOpen, claimStipend, STIPEND, buyItem, train, previewRefine, refine, equipRelic, unequipRelic,
+  nodeUnlocked, chapterCleared, clearNode, starsLit, claimChest, lightGate, gateOpen, claimStipend, STIPEND, buyItem, train, previewRefine, refine, equipRelic, unequipRelic,
   relicOwner, enemyXp, enemyDust,
 };

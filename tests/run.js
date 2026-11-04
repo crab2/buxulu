@@ -394,6 +394,16 @@ test('beating every required node opens the next chapter and lights the star', (
   assert.strictEqual(s.progress.stars, 1);
 });
 
+test('the seventh star lights only when the handle is turned', () => {
+  const s = E.defaultSave();
+  CHAPTERS.forEach((c) => c.nodes.forEach((n) => { if (n.type !== 'chest') E.clearNode(s, n.id); }));
+  assert.strictEqual(E.starsLit(s), 6, 'every boss beaten, no choice made');
+  s.progress.ending = 'hold';
+  assert.strictEqual(E.starsLit(s), 6, 'letting go leaves the last star dark');
+  s.progress.ending = 'turn';
+  assert.strictEqual(E.starsLit(s), 7);
+});
+
 test('saves from an older version gain new fields without losing progress', () => {
   const old = { v: 1, seq: 9, stardust: 77, heroes: { cen: { lv: 12, xp: 0, joined: true, train: { hp: 1, atk: 2, def: 3, spd: 4 }, relics: [null, null] } }, progress: { chapter: 2, cleared: { c1a: true }, stars: 2 } };
   const s = E.upgrade(old);

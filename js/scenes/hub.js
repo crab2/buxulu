@@ -79,8 +79,10 @@ class Hub {
     const s = store.get();
     const sceneH = this.sceneH;
     ui.ctx.drawImage(art.hub(W, sceneH + 20), 0, -20 + 0);
-    drawDipper(W * 0.62, D.contentTop + 4, Math.min(W * 0.42, sceneH * 0.5), s.progress.stars + (s.progress.ending === 'turn' ? 1 : 0));
-    if (s.progress.ending === 'turn') ui.img(art.peach(), W / 2 + 2, sceneH - 66);
+    const lit = E.starsLit(s);
+    drawDipper(W * 0.62, D.contentTop + 4, Math.min(W * 0.42, sceneH * 0.5), lit);
+    // Planted beside the station with its roots on the ground, clear of the hero and the flagpole.
+    if (s.progress.ending === 'turn') ui.img(art.peach(), W / 2 - 122, sceneH - 96);
     // The star disc on the altar turns all the time.
     drawDisc(W / 2 + 62, sceneH - 72 + 28 - 8, 10, game.t, 0);
     this.fx.draw();
@@ -94,7 +96,7 @@ class Hub {
     const ch = CHAPTERS[s.progress.chapter];
     ui.button('hub-map', m, y, bw, 44, {
       label: s.progress.ending === 'turn' ? '行路 · 故地重游' : `行路 · ${ch.dir}方${ch.name}`,
-      sub: `第 ${s.progress.chapter + 1} 程 · 下一颗星:${STAR_NAMES[Math.min(s.progress.stars, 6)]}`,
+      sub: lit >= 7 ? '七星归位 · 四时流转' : `第 ${s.progress.chapter + 1} 程 · 下一颗星:${STAR_NAMES[Math.min(s.progress.stars, 6)]}`,
       subColor: '#3a2a14', kind: 'primary', onTap: () => game.go('map'),
     });
     y += 48;
@@ -112,7 +114,7 @@ class Hub {
     });
     y += rowH + 4;
     ui.button('hub-settings', W - m - 62, y, 62, 24, { label: '设置', kind: 'ghost', onTap: () => game.push('settings') });
-    ui.text(`已亮 ${s.progress.stars} / 7 星`, m + 2, y + 6, UI.dim);
+    ui.text(`已亮 ${lit} / 7 星`, m + 2, y + 6, UI.dim);
   }
 }
 
