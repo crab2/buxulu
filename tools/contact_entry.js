@@ -1,6 +1,7 @@
 const { heroGrid, PORTRAITS } = require('../js/art/heroes.js');
 const { DRAW, monsterGrid } = require('../js/art/monsters.js');
-const { battleBg, hubScene, mapBg } = require('../js/art/scenery.js');
+const { battleBg, mapBg } = require('../js/art/scenery.js');
+const { hubScene } = require('../js/art/station.js');
 const { ICONS } = require('../js/art/icons.js');
 
 const out = window.document.getElementById('out');
@@ -15,7 +16,7 @@ function show(grid, scale, label) {
 }
 const which = window.__SHEET__;
 if (which === 'all' || which === 'heroes') {
-  ['cen', 'ruo', 'zhuo'].forEach((id) => ['idle0', 'atk', 'thrust', 'cast', 'hurt', 'walk0', 'ko'].forEach((p) => show(heroGrid(id, p), 3, id + ' ' + p)));
+  ['cen', 'ruo', 'zhuo'].forEach((id) => ['idle0', 'walk0', 'walk1', 'walk2', 'walk3', 'walk4', 'walk5', 'windup', 'atk', 'thrust', 'cast', 'hurt', 'ko'].forEach((p) => show(heroGrid(id, p), 2, id + ' ' + p)));
   Object.keys(PORTRAITS).forEach((k) => show(PORTRAITS[k](), 4, k));
   Object.keys(ICONS).forEach((k) => show(ICONS[k](), 3, k));
 }
@@ -27,7 +28,7 @@ if (which === 'all' || which === 'bosses') {
 }
 if (which === 'all' || which === 'bgs') {
   ['spring', 'summer', 'loess', 'autumn', 'winter', 'void'].forEach((t) => show(battleBg(t, 200, 240), 2, t));
-  show(hubScene(270, 240, 3), 2, 'hub');
+  show(hubScene(270, 420), 2, 'hub');
   const path = [{ x: 60, y: 260, bend: 18 }, { x: 150, y: 190, bend: -22 }, { x: 80, y: 120, bend: 20 }, { x: 150, y: 50 }];
   ['spring', 'summer', 'winter', 'void'].forEach((t) => show(mapBg(t, 200, 290, path), 1, 'map ' + t));
 }

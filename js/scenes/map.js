@@ -9,13 +9,14 @@ const E = require('../systems/economy.js');
 const G = require('../data/game.js');
 const { CHAPTERS } = require('../data/chapters.js');
 const O = require('./overlays.js');
+const Idle = require('../systems/idle.js');
+const Campaign = require('./campaign.js');
 const { Weather } = require('../core/fx.js');
 const { UI, C } = require('../core/palette.js');
-const { TIPS } = require('../data/story.js');
 
 const { W, H } = D;
 const NODE_GAP = 74;
-const PANEL_H = 86;
+const PANEL_H = 94;
 const NODE_INFO = {
   fight: { icon: 'sword', col: C.red2, ring: C.red3, name: '遭遇战' },
   elite: { icon: 'skull', col: C.violet2, ring: C.violet3, name: '强敌' },
@@ -49,7 +50,6 @@ class WorldMap {
     const { pts, mapH } = layoutNodes(ch);
     this.pts = pts;
     this.mapH = mapH;
-    this.bg = art.mapBg(ch.theme, W, mapH, pts, ch.id);
     this.weather = new Weather(ch.theme);
     const s = store.get();
     let idx = pts.findIndex((q) => q.node.type !== 'chest' && !s.progress.cleared[q.node.id]);
@@ -122,69 +122,20 @@ class WorldMap {
     const i = this.selected;
     const q = this.pts[i];
     const node = q.node;
-    const totalSteps = s.steps.total;
     if (node.type === 'chest') {
       if (s.progress.cleared[node.id]) return ui.toast('这里已经搜过了');
-      if (totalSteps < node.needSteps) {
-        O.modal({
-          title: '脚力不足',
-          text: `这条岔路太险,需要累计行走 ${ui.fmt(node.needSteps)} 步才能攀上去。你现在是 ${ui.fmt(totalSteps)} 步。`,
-          buttons: [{ label: '知道了' }, { label: '去步虚台', kind: 'jade', onTap: () => game.go('altar') }],
-        });
-        return;
-      }
-      return this.walkTo(i, () => {
-        const reward = E.claimChest(s, node.id);
-        store.persist();
-        this.advanceSelection();
-        audio.sfx('win');
-        O.modal({ title: '脚力宝箱', text: '你爬上险坡,找到了前人留下的行囊。', rows: O.rewardRows(reward), buttons: [{ label: '收下', kind: 'primary' }] });
-      });
+      if (Idle.footpower(s) < node.needFoot) return Campaign.openChest(node.id);
+      return this.walkTo(i, () => Campaign.openChest(node.id, () => this.advanceSelection()));
     }
-    if (node.type === 'boss' && !E.gateOpen(s, node.id)) {
-      O.tip('gate', TIPS.gate);
-      const can = s.stardust >= node.cost;
-      O.modal({
-        title: `点亮「${this.ch.star}」星位`,
-        text: `星位暗着,挡住了去路。献上星砂点亮它,才能挑战守星之敌。只需点亮一次,战败不用再付。`,
-        rows: [{ icon: 'dust', label: '需要', value: ui.fmt(node.cost), valueColor: can ? UI.gold : UI.red }, { icon: 'dust', label: '持有', value: ui.fmt(s.stardust) }],
-        buttons: can
-          ? [{ label: '再想想' }, { label: '点亮', kind: 'primary', sound: 'gate', onTap: () => { E.lightGate(s, node.id); store.persist(); audio.sfx('gate'); audio.buzz('heavy'); this.startNode(i); } }]
-          : [{ label: '知道了' }, { label: '去步虚台', kind: 'jade', onTap: () => game.go('altar') }],
-      });
-      return;
-    }
-    this.startNode(i);
-  }
-  startNode(i) {
-    const s = store.get();
-    const node = this.pts[i].node;
-    this.walkTo(i, () => {
-      if (node.type === 'event') {
-        O.runEvent(node.key, () => {
-          E.clearNode(s, node.id);
-          store.persist();
-          // After an event fight the map was rebuilt, so update whichever instance is on screen.
-          const current = game.stack[0];
-          if (current && current.advanceSelection) current.advanceSelection();
-        }, (fight, win) => {
-          game.go('battle', { fight, chapter: this.ci, focus: i, onWinNode: null, eventWin: true, resume: { key: node.key, node: node.id, win } });
-        });
-        return;
-      }
-      O.story(node.before, () => {
-        if (node.id === 'c1b') {
-          // A Ruo steps in at the start of this fight, then formally joins afterwards.
-          E.joinHero(s, 'ruo');
-          store.persist();
-        }
-        if (node.id === 'c6h' && s.progress.cleared.c6h) {
-          // The ending can be chosen again without refighting the final boss.
-          return game.go('ending', { replayChoice: true });
-        }
-        game.go('battle', { node, chapter: this.ci, focus: i });
-      });
-    });
+    return this.walkTo(i, () => Campaign.enter(node.id, {
+      from: 'map',
+      focus: i,
+      back: () => {
+        // After an event fight the map was rebuilt, so update whichever instance is on screen.
+        const current = game.stack[0];
+        if (current && current.advanceSelection) current.advanceSelection();
+      },
+    }));
   }
   advanceSelection() {
     const s = store.get();
@@ -199,7 +150,7 @@ class WorldMap {
     const s = store.get();
     const top = D.contentTop;
     ui.rect(0, 0, W, H, '#0b0a14');
-    ui.ctx.drawImage(this.bg, 0, Math.round(top - this.scroll));
+    ui.ctx.drawImage(art.mapBg(this.ch.theme, W, this.mapH, this.pts, this.ch.id), 0, Math.round(top - this.scroll));
     const pts = this.pts;
     const off = top - Math.round(this.scroll);
     ui.state.clip = { x: 0, y: top, w: W, h: H - PANEL_H - D.safeBottom - 4 - top };
@@ -225,14 +176,16 @@ class WorldMap {
       if (cleared) ui.rect(q.x + 7, y + 7, 5, 5, '#7fd1a4');
       if (cleared) ui.rect(q.x + 8, y + 8, 3, 3, '#1f6a5c');
       if (n.type === 'boss') ui.text(this.ch.star, q.x, y + 15, UI.gold, { align: 'c', outline: true });
-      if (n.type === 'chest' && !cleared) ui.text(`${n.needSteps >= 10000 ? n.needSteps / 10000 + '万' : n.needSteps / 1000 + '千'}步`, q.x, y + 15, s.steps.total >= n.needSteps ? UI.jade : UI.dim, { align: 'c', outline: true });
+      if (n.type === 'chest' && !cleared) ui.text(`${n.needFoot >= 10000 ? n.needFoot / 10000 + '万' : n.needFoot / 1000 + '千'}脚力`, q.x, y + 15, Idle.footpower(s) >= n.needFoot ? UI.jade : UI.text, { align: 'c', outline: true });
       if (!this.walk) ui.hit('node-' + n.id, q.x - 20, y - 20, 40, 40, () => this.select(i), { label: 'node-' + n.id });
     });
     ui.state.clip = null;
-    const frame = this.walk ? 'walk' + (Math.floor(game.t * 8) % 4) : Math.floor(game.t * 1.6) % 2 ? 'idle1' : 'idle0';
+    const frame = this.walk ? 'walk' + (Math.floor(game.t * 10) % 6) : Math.floor(game.t * 1.6) % 2 ? 'idle1' : 'idle0';
     const faceRight = this.walk && this.walk.x1 > this.walk.x0;
-    const heroArt = faceRight ? art.heroFlip('cen', frame) : art.hero('cen', frame);
-    ui.img(heroArt.cv, this.hx - heroArt.w / 2, this.hy + off - heroArt.h + 4 - 12);
+    const heroArt = art.hero('cen', frame, s.heroes.cen.outfit);
+    const hxx = this.hx - heroArt.w / 2, hyy = this.hy + off - heroArt.h - 7;
+    if (faceRight) ui.imgFlip(heroArt, hxx, hyy);
+    else ui.img(heroArt, hxx, hyy);
     this.weather.draw();
     this.drawPanel(s);
     this.drawHeader(s);
@@ -240,15 +193,18 @@ class WorldMap {
   drawHeader(s) {
     ui.rect(0, 0, W, D.contentTop, '#1d1a2e');
     ui.rect(0, D.contentTop - 1, W, 1, UI.line);
-    ui.header('', () => game.go('hub'), s.stardust);
-    const y = D.capTop;
-    const h = Math.max(20, D.capBottom - D.capTop);
+    ui.header('', () => game.go('road'), s.stardust, s.coin);
     const canPrev = this.ci > 0, canNext = this.ci < s.progress.chapter;
     const label = this.ch.name;
-    ui.text(label, 66, y + (h - ui.font.CELL) / 2, UI.text);
-    const sx = 40;
-    if (canPrev) ui.button('ch-prev', sx, y, 20, h, { label: '◀'.replace('◀', '<'), kind: 'ghost', onTap: () => this.setChapter(this.ci - 1) });
-    if (canNext) ui.button('ch-next', 66 + ui.font.width(label) + 3, y, 20, h, { label: '>', kind: 'ghost', onTap: () => this.setChapter(this.ci + 1) });
+    // The region switcher gets its own row, because the currencies share the capsule row.
+    const ry = D.contentTop + 3;
+    const lw = ui.font.width(label) + 14;
+    ui.alpha(0.8);
+    ui.rect(W / 2 - lw / 2, ry, lw, 18, '#14121f');
+    ui.alpha(1);
+    ui.text(label, W / 2, ry + 3, UI.text, { align: 'c' });
+    if (canPrev) ui.button('ch-prev', W / 2 - lw / 2 - 24, ry, 22, 18, { label: '<', kind: 'normal', onTap: () => this.setChapter(this.ci - 1) });
+    if (canNext) ui.button('ch-next', W / 2 + lw / 2 + 2, ry, 22, 18, { label: '>', kind: 'normal', onTap: () => this.setChapter(this.ci + 1) });
   }
   drawPanel(s) {
     const i = this.selected;
@@ -277,17 +233,15 @@ class WorldMap {
     } else if (n.type === 'event') {
       ui.text(s.progress.cleared[n.id] ? '你已经走过这里。' : '路上,总会遇到些什么。', 16, y + 27, UI.dim);
     } else if (n.type === 'chest') {
-      ui.text(`累计 ${ui.fmt(n.needSteps)} 步可开(现 ${ui.fmt(s.steps.total)})`, 16, y + 27, UI.dim);
+      ui.text(`${ui.fmt(n.needFoot)} 脚力可开(现 ${ui.fmt(Idle.footpower(s))})`, 16, y + 27, UI.dim);
     }
-    if (n.type === 'boss' && !E.gateOpen(s, n.id)) {
-      ui.text(`点亮需 ${ui.fmt(n.cost)} 星砂`, 16, y + 44, s.stardust >= n.cost ? UI.gold : UI.red);
-    } else if (s.progress.cleared[n.id] && n.foes) {
-      ui.text('可重复挑战,获取经验与妖灵', 16, y + 44, UI.dim);
+    if (s.progress.cleared[n.id] && n.foes) {
+      ui.text('可再打一次,赚经验、捉妖灵', 16, y + 44, UI.dim);
     } else if (n.type === 'fight' || n.type === 'elite') {
       ui.text('血量低时可用封灵符封印妖灵', 16, y + 44, UI.dim);
     }
     const cleared = !!s.progress.cleared[n.id];
-    const label = n.type === 'chest' ? (cleared ? '已开启' : '开启') : n.type === 'event' ? (cleared ? '已走过' : '前往') : n.type === 'boss' && !E.gateOpen(s, n.id) ? '点亮星位' : '出发';
+    const label = n.type === 'chest' ? (cleared ? '已开启' : '开启') : n.type === 'event' ? (cleared ? '已走过' : '前往') : n.type === 'boss' && !cleared ? '挑战' : '出发';
     const off = (n.type === 'chest' || n.type === 'event') && cleared;
     ui.button('map-go', W - 92, y + h - 32, 80, 26, { label, kind: 'primary', disabled: off || !!this.walk, onTap: () => this.depart() });
     ui.button('map-party', 14, y + h - 32, 66, 26, { label: '队伍', kind: 'normal', onTap: () => game.go('party', { from: 'map' }) });

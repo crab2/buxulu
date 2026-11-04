@@ -50,16 +50,26 @@ function heroUnit(save, id, index) {
 // Enemy strength follows a shared curve, so each creature only has to state its personality.
 function enemyUnit(id, lv, index) {
   const m = D.MONSTERS[id];
-  const hp = Math.round((52 + 25 * lv) * m.hp);
+  // Enemies gain a little extra with level, so party level keeps its meaning all the way up the road.
+  const hard = 1 + 0.022 * lv;
+  const hp = Math.round((52 + 25 * lv) * m.hp * hard);
   return {
     id, key: id + index, side: 'enemy', name: m.name, el: m.el, lv, def_: m,
     maxHp: hp, hp, maxMp: 0, mp: 0,
-    atk: Math.round((12 + 4.7 * lv) * m.atk),
+    atk: Math.round((12 + 4.7 * lv) * m.atk * (1 + 0.017 * lv)),
     def: Math.round((4 + 1.7 * lv) * m.def),
     spd: Math.round((10 + 0.35 * lv) * m.spd * 10) / 10,
     mods: {}, skills: m.skills || [], statuses: {}, ct: Math.random() * 30, alive: true,
     boss: !!m.boss, elite: !!m.elite, pattern: m.pattern, patternI: 0, phases: (m.phases || []).slice(),
   };
+}
+
+// One number for "how strong is the party", shown on the road and party screens.
+function power(save) {
+  return joined(save).reduce((sum, id) => {
+    const st = heroStats(save, id);
+    return sum + st.hp * 0.3 + st.atk * 4 + st.def * 3 + st.spd * 4;
+  }, 0);
 }
 
 function joined(save) {
@@ -70,4 +80,4 @@ function partyUnits(save) {
   return joined(save).map((id, i) => heroUnit(save, id, i));
 }
 
-module.exports = { heroStats, learned, heroUnit, enemyUnit, partyUnits, joined, relicMods };
+module.exports = { heroStats, learned, heroUnit, enemyUnit, partyUnits, joined, relicMods, power };

@@ -12,9 +12,19 @@ const E = require('../js/systems/economy.js');
 const G = require('../js/data/game.js');
 const P = require('../js/systems/party.js');
 const { Battle } = require('../js/systems/battle.js');
-const { CHAPTERS } = require('../js/data/chapters.js');
+const { CHAPTERS, FLAT, NODE_INDEX } = require('../js/data/chapters.js');
 const { STORY, EVENTS } = require('../js/data/story.js');
 const { DRAW } = require('../js/art/monsters.js');
+const { ICONS } = require('../js/art/icons.js');
+const W = require('../js/data/world.js');
+const Idle = require('../js/systems/idle.js');
+const Boosts = require('../js/systems/boosts.js');
+const Dispatch = require('../js/systems/dispatch.js');
+const Garden = require('../js/systems/garden.js');
+const Tower = require('../js/systems/tower.js');
+const Wander = require('../js/systems/wander.js');
+const Daily = require('../js/systems/daily.js');
+const Wardrobe = require('../js/systems/wardrobe.js');
 const stepService = require('../cloudfunctions/stepExchange/service.js');
 const saveService = require('../cloudfunctions/cloudSave/service.js');
 
@@ -280,73 +290,109 @@ test('cloud save: junk and oversized saves are rejected', async () => {
 });
 
 // ---- Economy ----
-test('spending cannot take Stardust below zero', () => {
+const T0 = Date.UTC(2026, 10, 4, 2, 0, 0);
+const HOUR = 3600000;
+const seededRng = (n) => {
+  let x = n;
+  return () => {
+    x = (x * 1664525 + 1013904223) >>> 0;
+    return x / 4294967296;
+  };
+};
+function clearUpTo(s, id) {
+  for (const f of FLAT) {
+    if (f.node.type !== 'chest') E.clearNode(s, f.node.id);
+    if (f.node.id === id) break;
+  }
+}
+function strongParty(s, lv, tier) {
+  ['cen', 'ruo', 'zhuo'].forEach((id) => {
+    const h = s.heroes[id];
+    h.joined = true;
+    h.lv = lv;
+    h.train = { hp: tier, atk: tier, def: tier, spd: Math.round(tier / 2) };
+  });
+}
+
+test('spending cannot take coins or Stardust below zero', () => {
   const s = E.defaultSave();
+  s.coin = 10;
   s.stardust = 10;
   assert.strictEqual(E.buyItem(s, 'incense'), false);
   assert.strictEqual(E.train(s, 'cen', 'atk'), false);
+  assert.strictEqual(s.coin, 10);
+  assert.strictEqual(Boosts.buyHaste(s), false);
+  assert.strictEqual(Boosts.useJump(s, T0), false);
   assert.strictEqual(s.stardust, 10);
 });
 
 test('training stops at its cap', () => {
   const s = E.defaultSave();
-  s.stardust = 1e7;
-  for (let i = 0; i < 40; i++) E.train(s, 'cen', 'atk');
+  s.coin = 1e15;
+  for (let i = 0; i < G.TRAIN_MAX + 10; i++) E.train(s, 'cen', 'atk');
   assert.strictEqual(s.heroes.cen.train.atk, G.TRAIN_MAX);
 });
 
-test('a star gate is paid once and stays open after losing', () => {
+test('one-tap training spends only what the player has, across the party', () => {
   const s = E.defaultSave();
-  s.stardust = 600;
-  assert.strictEqual(E.gateOpen(s, 'c1h'), false);
-  assert.strictEqual(E.lightGate(s, 'c1h'), true);
-  assert.strictEqual(s.stardust, 100);
-  assert.strictEqual(E.lightGate(s, 'c1h'), true);
-  assert.strictEqual(s.stardust, 100);
-  assert.strictEqual(E.gateOpen(s, 'c1h'), true);
+  s.heroes.ruo.joined = true;
+  s.coin = 20000;
+  const r = E.autoTrain(s);
+  assert.ok(r.n > 0);
+  assert.ok(s.coin >= 0);
+  assert.ok(r.bought.cen > 0 && r.bought.ruo > 0, 'everyone who has joined gets a share');
+  assert.strictEqual(s.heroes.zhuo.train.atk, 0, 'nobody trains before joining');
 });
 
-test('a gate cannot be opened without enough Stardust', () => {
-  const s = E.defaultSave();
-  s.stardust = 10;
-  assert.strictEqual(E.lightGate(s, 'c1h'), false);
-  assert.strictEqual(E.gateOpen(s, 'c1h'), false);
-  assert.strictEqual(s.stardust, 10);
-});
-
-test('station wage can be claimed once per day', () => {
+test('station wage can be claimed once per day, and grows with the sky stair', () => {
   const s = E.defaultSave();
   assert.strictEqual(E.claimStipend(s, 100), E.STIPEND);
   assert.strictEqual(E.claimStipend(s, 100), 0);
-  assert.strictEqual(E.claimStipend(s, 101), E.STIPEND);
+  s.tower.best = 10;
+  assert.strictEqual(E.claimStipend(s, 101), E.STIPEND + 20);
 });
 
-test('refining consumes both spirits, charges the cost, and records the recipe', () => {
+test('refining takes real time, consumes both spirits, charges coins and records the recipe', () => {
   const s = E.defaultSave();
-  s.stardust = 1000;
+  s.coin = 100000;
   s.spirits = { vine: 1, wisp: 1 };
-  const it = E.refine(s, 'vine', 'wisp');
-  assert.strictEqual(it.type, 'fire_wood');
+  const job = E.startRefine(s, 'vine', 'wisp', T0);
+  assert.strictEqual(job.type, 'fire_wood');
   assert.deepStrictEqual(s.spirits, {});
-  assert.strictEqual(s.stardust, 1000 - G.RANKS[0].cost);
+  assert.strictEqual(s.coin, 100000 - G.RANKS[0].cost);
+  assert.deepStrictEqual(E.collectRefined(s, T0), [], 'nothing is ready straight away');
+  const done = E.collectRefined(s, T0 + G.RANKS[0].mins * 60000);
+  assert.strictEqual(done.length, 1);
+  assert.strictEqual(s.relics[0].type, 'fire_wood');
   assert.strictEqual(s.codex.recipes.fire_wood, 0);
+  assert.deepStrictEqual(E.collectRefined(s, T0 + 2 * HOUR), [], 'a relic is handed over once');
 });
 
-test('refining the same spirit twice needs two of it', () => {
+test('refining the same spirit twice needs two of it, and the furnace has limited room', () => {
   const s = E.defaultSave();
-  s.stardust = 1000;
+  s.coin = 1000000;
   s.spirits = { vine: 1 };
-  assert.strictEqual(E.refine(s, 'vine', 'vine'), null);
-  assert.strictEqual(s.stardust, 1000);
-  s.spirits.vine = 2;
-  assert.ok(E.refine(s, 'vine', 'vine'));
+  assert.strictEqual(E.startRefine(s, 'vine', 'vine', T0), null);
+  assert.strictEqual(s.coin, 1000000);
+  s.spirits.vine = 6;
+  for (let i = 0; i < E.FURNACE_SLOTS; i++) assert.ok(E.startRefine(s, 'vine', 'vine', T0));
+  assert.strictEqual(E.startRefine(s, 'vine', 'vine', T0), null, 'furnace is full');
 });
 
 test('a refine that cannot be paid for keeps the spirits', () => {
   const s = E.defaultSave();
   s.spirits = { vine: 2 };
-  assert.strictEqual(E.refine(s, 'vine', 'vine'), null);
+  assert.strictEqual(E.startRefine(s, 'vine', 'vine', T0), null);
   assert.strictEqual(s.spirits.vine, 2);
+});
+
+test('spare relics melt for coins, but anything worn is safe', () => {
+  const s = E.defaultSave();
+  s.relics = [{ uid: 'r1', type: 'metal_metal', rank: 1 }, { uid: 'r2', type: 'metal_metal', rank: 1 }];
+  E.equipRelic(s, 'cen', 0, 'r1');
+  assert.strictEqual(E.meltRelic(s, 'r1'), 0);
+  assert.ok(E.meltRelic(s, 'r2') > 0);
+  assert.strictEqual(s.relics.length, 1);
 });
 
 test('every element pair has a relic, and all 15 are distinct', () => {
@@ -404,12 +450,665 @@ test('the seventh star lights only when the handle is turned', () => {
   assert.strictEqual(E.starsLit(s), 7);
 });
 
-test('saves from an older version gain new fields without losing progress', () => {
-  const old = { v: 1, seq: 9, stardust: 77, heroes: { cen: { lv: 12, xp: 0, joined: true, train: { hp: 1, atk: 2, def: 3, spd: 4 }, relics: [null, null] } }, progress: { chapter: 2, cleared: { c1a: true }, stars: 2 } };
+test('saves from the turn-based version keep their progress and gain the idle systems', () => {
+  const old = { v: 1, seq: 9, stardust: 77, heroes: { cen: { lv: 12, xp: 0, joined: true, train: { hp: 1, atk: 2, def: 3, spd: 4 }, relics: [null, null] } }, progress: { chapter: 2, cleared: { c1a: true }, stars: 2, lit: { c1h: true } } };
   const s = E.upgrade(old);
   assert.strictEqual(s.stardust, 77);
   assert.strictEqual(s.heroes.cen.lv, 12);
-  assert.ok(s.heroes.zhuo && s.settings && s.progress.lit);
+  assert.strictEqual(s.progress.chapter, 2);
+  assert.ok(s.progress.cleared.c1a);
+  assert.ok(s.heroes.zhuo && s.settings && s.idle && s.dispatch && s.garden && s.tower && s.wander && s.daily && s.wardrobe);
+  assert.strictEqual(s.coin, 0);
+  assert.strictEqual(s.heroes.cen.train.atk, 4, 'tiers are half as strong now, so old ones double');
+  assert.strictEqual(E.upgrade(s).heroes.cen.train.atk, 4, 'upgrading again changes nothing');
+});
+
+// ---- The rule the whole design rests on ----
+test('nothing on the road costs Stardust or asks for real steps', () => {
+  FLAT.forEach(({ node }) => {
+    assert.strictEqual(node.cost, undefined, `${node.id} has a price`);
+    assert.strictEqual(node.needSteps, undefined, `${node.id} asks for real steps`);
+  });
+  ['pill', 'ether', 'incense', 'seal'].forEach((id) => {
+    const s = E.defaultSave();
+    s.coin = 1e9;
+    assert.ok(E.buyItem(s, id), 'supplies are bought with coins');
+    assert.strictEqual(s.stardust, 0);
+  });
+});
+
+test('a player with no steps and no Stardust can clear every node and open every feature', () => {
+  const s = E.defaultSave();
+  assert.strictEqual(s.steps.total, 0);
+  FLAT.forEach(({ node }) => {
+    if (node.type === 'chest') return;
+    assert.ok(E.nodeUnlocked(s, node.id), `${node.id} locked`);
+    E.clearNode(s, node.id);
+  });
+  assert.strictEqual(s.stardust, 0);
+  assert.strictEqual(s.progress.stars, 6);
+  Object.keys(W.UNLOCKS).forEach((f) => assert.ok(E.unlocked(s, f), f));
+});
+
+test('progress code never reads real steps, except footpower, which time also fills', () => {
+  // These files decide what the player can reach. Stride and rolls are bonuses, so they live apart.
+  ['js/systems/battle.js', 'js/systems/party.js', 'js/systems/tower.js', 'js/systems/garden.js', 'js/systems/dispatch.js'].forEach((f) => {
+    assert.ok(!/steps/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')), `${f} mentions steps`);
+  });
+});
+
+test('every chest opens from time on the road alone, with no real steps', () => {
+  const s = E.defaultSave();
+  s.idle.total = 200000 / Idle.FOOT_PER_SEC;
+  assert.strictEqual(s.steps.total, 0);
+  FLAT.forEach(({ node }) => {
+    if (node.type !== 'chest') return;
+    assert.ok(Idle.footpower(s) >= node.needFoot, `${node.id} out of reach`);
+  });
+});
+
+test('balance: the whole game can be finished at every activity level, walking or not', () => {
+  const { run, PROFILES } = require('./simulate.js');
+  const avg = (p) => {
+    let t = 0;
+    for (let i = 1; i <= 4; i++) {
+      const r = run(1234 * i, PROFILES[p]);
+      assert.ok(r.finished, `${p} did not finish`);
+      t += r.days;
+    }
+    return t / 4;
+  };
+  const none = avg('noneActive');
+  const typical = avg('typical');
+  const keen = avg('keen');
+  const lazy = avg('none');
+  assert.ok(none <= 30, `no steps should be a normal pace, took ${none} days`);
+  assert.ok(lazy <= 45, `even collecting only should finish, took ${lazy} days`);
+  assert.ok(typical < none && keen <= typical + 1, `walking should help: ${none} / ${typical} / ${keen}`);
+  // The old build's gap was 3.6x. Steps may speed things up, but they may never be the difference.
+  assert.ok(none / keen <= 1.6, `no-steps pace must stay close: ${none} vs ${keen}`);
+});
+
+// ---- The march ----
+test('time away fills the pack at the published rate', () => {
+  const s = E.defaultSave();
+  Idle.sync(s, T0);
+  const r = Idle.rates(s, T0);
+  const dt = Idle.sync(s, T0 + 10 * 60000);
+  assert.strictEqual(dt, 600);
+  assert.ok(Math.abs(s.idle.pack.coin - r.coin * 10) < r.coin * 3, 'coins near the rate, allowing for arrival rewards');
+  assert.ok(s.idle.pack.xp >= r.xp * 10 - 1);
+  assert.strictEqual(s.coin, 0, 'earnings wait in the pack');
+});
+
+test('the pack stops filling at capacity, so a long absence has a limit', () => {
+  const s = E.defaultSave();
+  Idle.sync(s, T0);
+  const dt = Idle.sync(s, T0 + 1000 * HOUR);
+  assert.strictEqual(dt, Idle.BASE_CAP_HOURS * 3600);
+  assert.strictEqual(Idle.sync(s, T0 + 1001 * HOUR), 0, 'nothing more until it is emptied');
+  Idle.collect(s);
+  assert.ok(Idle.sync(s, T0 + 1002 * HOUR) > 0);
+});
+
+test('a clock moved backwards earns nothing and costs nothing', () => {
+  const s = E.defaultSave();
+  Idle.sync(s, T0);
+  Idle.sync(s, T0 + HOUR);
+  const pack = JSON.stringify(s.idle.pack);
+  assert.strictEqual(Idle.sync(s, T0 - 5 * HOUR), 0);
+  assert.strictEqual(JSON.stringify(s.idle.pack), pack);
+  assert.strictEqual(Idle.sync(s, T0 - 5 * HOUR + 60000), 60, 'and time counts normally from there');
+});
+
+test('syncing in small steps earns about the same as one big step', () => {
+  const big = E.defaultSave(), small = E.defaultSave();
+  [big, small].forEach((x) => { x.progress.cleared.c1a = true; x.progress.cleared.c1b = true; x.progress.cleared.c1c = true; Idle.sync(x, T0); });
+  Idle.sync(big, T0 + 2 * HOUR);
+  for (let i = 1; i <= 120; i++) Idle.sync(small, T0 + i * 60000);
+  const ratio = small.idle.pack.coin / big.idle.pack.coin;
+  assert.ok(ratio > 0.9 && ratio < 1.1, `small/big = ${ratio}`);
+});
+
+test('collecting empties the pack exactly once and levels the party', () => {
+  const s = E.defaultSave();
+  Idle.sync(s, T0);
+  s.idle.pack.coin = 500.7;
+  s.idle.pack.xp = 100000;
+  s.idle.pack.items = { pill: 2 };
+  s.idle.pack.spirits = { vine: 1 };
+  s.idle.pack.herbs = { wood: 3 };
+  const c = Idle.collect(s);
+  assert.strictEqual(c.coin, 500);
+  assert.strictEqual(s.coin, 500);
+  assert.strictEqual(s.items.pill, 5);
+  assert.strictEqual(s.spirits.vine, 1);
+  assert.strictEqual(s.herbs.wood, 3);
+  assert.ok(s.heroes.cen.lv > 1);
+  assert.ok(c.ups.length > 0);
+  assert.ok(Idle.packEmpty(s));
+  const again = Idle.collect(s);
+  assert.strictEqual(again.coin, 0);
+  assert.strictEqual(s.coin, 500);
+});
+
+test('the party waits for story and bosses, but keeps earning while it waits', () => {
+  const s = E.defaultSave();
+  Idle.sync(s, T0);
+  Idle.sync(s, T0 + HOUR);
+  const st = Idle.status(s);
+  assert.strictEqual(st.kind, 'hold', 'the very first fight has a story beat');
+  assert.strictEqual(st.node.id, 'c1a');
+  assert.ok(!s.progress.cleared.c1a, 'no story is ever skipped behind the player\'s back');
+  const coin = s.idle.pack.coin;
+  Idle.sync(s, T0 + 2 * HOUR);
+  assert.ok(s.idle.pack.coin > coin, 'time spent waiting is not wasted');
+});
+
+test('plain fights clear by themselves, and a strong party marches through them', () => {
+  const s = E.defaultSave();
+  strongParty(s, 30, 20);
+  clearUpTo(s, 'c1d');
+  Idle.sync(s, T0);
+  Idle.sync(s, T0 + HOUR, seededRng(3));
+  assert.ok(s.progress.cleared.c1f && s.progress.cleared.c1g, 'the elite and the fight after it fell on the march');
+  assert.strictEqual(Idle.status(s).kind, 'hold');
+  assert.strictEqual(Idle.status(s).node.id, 'c1h', 'and the boss waits for the player');
+  assert.ok(!s.progress.cleared.c1h);
+});
+
+test('a fight too hard blocks the road until the party grows, then it retries', () => {
+  const s = E.defaultSave();
+  clearUpTo(s, 'c5a');
+  E.joinHero(s, 'ruo');
+  E.joinHero(s, 'zhuo');
+  Idle.sync(s, T0);
+  Idle.sync(s, T0 + 2 * HOUR, seededRng(5));
+  assert.strictEqual(Idle.status(s).kind, 'blocked');
+  assert.ok(!s.progress.cleared.c5b);
+  const coin = s.idle.pack.coin;
+  Idle.sync(s, T0 + 3 * HOUR, seededRng(5));
+  assert.ok(s.idle.pack.coin > coin, 'still earning while blocked');
+  strongParty(s, 90, 50);
+  Idle.nudge(s);
+  Idle.sync(s, T0 + 3 * HOUR + 60000, seededRng(5));
+  assert.ok(s.progress.cleared.c5b, 'the retry comes as soon as the party is stronger');
+});
+
+test('a boss is never beaten on the march', () => {
+  const s = E.defaultSave();
+  strongParty(s, 99, 60);
+  Idle.sync(s, T0);
+  for (let h = 1; h <= 40; h++) {
+    Idle.sync(s, T0 + h * HOUR, seededRng(h));
+    Idle.collect(s);
+  }
+  FLAT.forEach(({ node }) => { if (node.type === 'boss') assert.ok(!s.progress.cleared[node.id], node.id); });
+});
+
+test('income rises with distance from home', () => {
+  const near = E.defaultSave(), far = E.defaultSave();
+  clearUpTo(far, 'c5h');
+  assert.ok(Idle.rates(far, T0).coin > Idle.rates(near, T0).coin * 2);
+  assert.ok(Idle.rates(far, T0).xp > Idle.rates(near, T0).xp * 2);
+});
+
+test('pack capacity grows with stars and blessings', () => {
+  const s = E.defaultSave();
+  const base = Idle.capSecs(s);
+  clearUpTo(s, 'c1h');
+  assert.strictEqual(Idle.capSecs(s), base + 3600);
+  s.blessings.pack = 2;
+  assert.strictEqual(Idle.capSecs(s), base + 3 * 3600);
+});
+
+test('after the ending the road loops with stronger enemies', () => {
+  const s = E.defaultSave();
+  FLAT.forEach(({ node }) => { if (node.type !== 'chest') E.clearNode(s, node.id); });
+  assert.strictEqual(Idle.status(s).kind, 'ending', 'the final choice waits for the player');
+  s.progress.ending = 'turn';
+  strongParty(s, 100, 55);
+  Idle.sync(s, T0);
+  assert.strictEqual(Idle.status(s).kind, 'lap');
+  const lv0 = Idle.stageLevel(s);
+  const coin0 = Idle.rates(s, T0).coin;
+  for (let h = 1; h <= 40; h++) {
+    Idle.sync(s, T0 + h * HOUR, seededRng(h));
+    Idle.collect(s);
+  }
+  assert.ok(s.progress.lap >= 1, 'a full lap was walked');
+  assert.ok(Idle.stageLevel(s) > lv0, 'enemies got stronger');
+  assert.ok(Idle.rates(s, T0).coin > coin0, 'and so did the income');
+});
+
+// ---- Steps as an enhancement ----
+test('haste doubles earnings and is never wasted on a full pack', () => {
+  // Both parties wait at the first story stop, so only the steady rate is being compared.
+  const plain = E.defaultSave(), fast = E.defaultSave();
+  [plain, fast].forEach((x) => Idle.sync(x, T0));
+  fast.stardust = W.BOOSTS.haste.cost;
+  assert.ok(Boosts.buyHaste(fast));
+  assert.strictEqual(fast.stardust, 0);
+  Idle.sync(plain, T0 + 1800000);
+  Idle.sync(fast, T0 + 1800000);
+  const r = fast.idle.pack.xp / plain.idle.pack.xp;
+  assert.ok(Math.abs(r - 2) < 0.01, `haste should double earnings, got ${r}`);
+  assert.strictEqual(fast.idle.hasteSecs, 0, 'and it is used up by then');
+  // A full pack does not use up the bank.
+  const s = E.defaultSave();
+  Idle.sync(s, T0);
+  s.idle.secs = Idle.capSecs(s);
+  s.idle.hasteSecs = 1800;
+  Idle.sync(s, T0 + HOUR);
+  assert.strictEqual(s.idle.hasteSecs, 1800);
+});
+
+test('the time jump gives an hour at once, ignoring capacity', () => {
+  const s = E.defaultSave();
+  Idle.sync(s, T0);
+  s.idle.secs = Idle.capSecs(s);
+  s.stardust = W.BOOSTS.jump.cost;
+  const before = s.idle.pack.coin;
+  assert.ok(Boosts.useJump(s, T0));
+  assert.ok(s.idle.pack.coin > before + Idle.rates(s, T0).coin * 50);
+  assert.strictEqual(s.idle.secs, Idle.capSecs(s));
+});
+
+test('today\'s real steps speed up today, and only today', () => {
+  const s = E.defaultSave();
+  const day = Idle.dayOf(T0);
+  assert.strictEqual(Idle.strideBonus(s, T0), 0, 'nobody is punished for not walking');
+  const base = Idle.rates(s, T0).coin;
+  s.steps.lastView = { today: { day, steps: 7000 } };
+  assert.strictEqual(Idle.strideBonus(s, T0), 0.1);
+  assert.ok(Math.abs(Idle.rates(s, T0).coin - base * 1.1) < 0.001);
+  assert.strictEqual(Idle.strideBonus(s, T0 + 86400000), 0, 'it ends with the day');
+  s.steps.lastView.today.steps = 16000;
+  assert.strictEqual(Idle.strideBonus(s, T0), 0.2);
+});
+
+test('walking moves the party along and adds rolls, on top of the usual pace', () => {
+  const s = E.defaultSave();
+  const g = { id: 'g1', dust: 500, items: {}, notes: [{ kind: 'today', steps: 5000, dust: 500 }] };
+  const rolls = s.wander.rolls;
+  E.applyGrants(s, [g]);
+  assert.strictEqual(s.idle.dashLi, 5);
+  assert.strictEqual(s.wander.rolls, rolls + 2);
+  assert.strictEqual(s.wander.stepCarry, 1000, 'the remainder carries over');
+  E.applyGrants(s, [g]);
+  assert.strictEqual(s.wander.rolls, rolls + 2, 'a repeated grant adds nothing');
+});
+
+test('blessing prices rise, tiers stop at their maximum, and each does its job', () => {
+  const s = E.defaultSave();
+  assert.ok(Boosts.blessingCost('fortune', 1) > Boosts.blessingCost('fortune', 0));
+  s.stardust = 1e9;
+  for (let i = 0; i < 20; i++) Boosts.buyBlessing(s, 'fortune');
+  assert.strictEqual(s.blessings.fortune, W.BLESSINGS.fortune.max);
+  const plain = E.defaultSave();
+  assert.ok(Idle.rates(s, T0).coin > Idle.rates(plain, T0).coin);
+});
+
+test('looks do not change strength', () => {
+  const s = E.defaultSave();
+  s.stardust = 1e6;
+  const before = JSON.stringify(P.heroStats(s, 'cen'));
+  assert.ok(Wardrobe.buy(s, 'cen_moon'));
+  assert.ok(Wardrobe.toggle(s, 'cen_moon'));
+  assert.strictEqual(s.heroes.cen.outfit, 'cen_moon');
+  assert.strictEqual(JSON.stringify(P.heroStats(s, 'cen')), before);
+  assert.strictEqual(Wardrobe.buy(s, 'cen_moon'), false, 'cannot buy twice');
+  Wardrobe.toggle(s, 'cen_moon');
+  assert.strictEqual(s.heroes.cen.outfit, null);
+});
+
+test('some looks are earned by walking or wandering rather than bought', () => {
+  const s = E.defaultSave();
+  assert.strictEqual(Wardrobe.owned(s, 'pet_tortoise'), false);
+  assert.strictEqual(Wardrobe.buy(s, 'pet_tortoise'), false);
+  s.steps.total = 100000;
+  assert.strictEqual(Wardrobe.owned(s, 'pet_tortoise'), true);
+  s.wander.laps = 3;
+  assert.strictEqual(Wardrobe.owned(s, 'pet_lamp'), true);
+});
+
+// ---- Activities ----
+function openDispatch() {
+  const s = E.defaultSave();
+  clearUpTo(s, 'c1h');
+  Dispatch.refill(s, T0, seededRng(1));
+  return s;
+}
+
+test('the errand board fills up, and new errands arrive over time', () => {
+  const s = openDispatch();
+  assert.ok(s.dispatch.board.length >= 3);
+  s.dispatch.board.forEach((j) => assert.ok(G.ELEMENTS[j.el] && j.mins > 0 && j.title));
+  while (s.dispatch.board.length) s.dispatch.board.pop();
+  Dispatch.refill(s, T0 + 1000, seededRng(2));
+  const a = s.dispatch.board.length;
+  Dispatch.refill(s, T0 + 12 * HOUR, seededRng(2));
+  assert.ok(s.dispatch.board.length >= a);
+  assert.ok(s.dispatch.board.length <= Dispatch.BOARD_SIZE);
+});
+
+test('a courier can only carry one errand, and the desk has limited room', () => {
+  const s = openDispatch();
+  assert.strictEqual(Dispatch.slots(s), 2);
+  const [a, b, c] = s.dispatch.board;
+  assert.ok(Dispatch.send(s, a.id, 'dou', T0));
+  assert.strictEqual(Dispatch.send(s, b.id, 'dou', T0), false, 'already out');
+  assert.ok(Dispatch.send(s, b.id, 'zhou', T0));
+  assert.strictEqual(Dispatch.send(s, c.id, 'hong', T0), false, 'no free desk');
+  assert.strictEqual(s.dispatch.active.length, 2);
+});
+
+test('a courier not yet hired cannot be sent', () => {
+  const s = openDispatch();
+  assert.strictEqual(Dispatch.send(s, s.dispatch.board[0].id, 'tao', T0), false);
+});
+
+test('an element match pays more, and traits do what they say', () => {
+  const s = openDispatch();
+  const job = { title: 'x', el: 'fire', mins: 240, ci: 0 };
+  const hong = W.COURIERS.find((c) => c.id === 'hong');
+  const zhou = W.COURIERS.find((c) => c.id === 'zhou');
+  const dou = W.COURIERS.find((c) => c.id === 'dou');
+  const m = Dispatch.preview(s, job, hong);
+  assert.ok(m.match);
+  assert.ok(m.reward.coin > Dispatch.preview(s, { ...job, el: 'metal' }, hong).reward.coin);
+  assert.ok(Dispatch.preview(s, job, dou).match, 'wood feeds fire');
+  assert.strictEqual(Dispatch.preview(s, job, dou).mins, Math.round(240 * 0.85));
+  assert.ok(Dispatch.preview(s, { ...job, el: 'metal' }, zhou).match, 'earth bears metal');
+});
+
+test('finished errands pay exactly once, unfinished ones keep running', () => {
+  const s = openDispatch();
+  const [a, b] = s.dispatch.board.slice().sort((x, y) => x.mins - y.mins);
+  a.mins = 30;
+  b.mins = 480;
+  Dispatch.send(s, a.id, 'zhou', T0);
+  Dispatch.send(s, b.id, 'dou', T0);
+  assert.strictEqual(Dispatch.claimAll(s, T0, seededRng(1)).n, 0);
+  const r = Dispatch.claimAll(s, T0 + HOUR, seededRng(1));
+  assert.strictEqual(r.n, 1);
+  assert.ok(s.coin > 0);
+  const coin = s.coin;
+  assert.strictEqual(Dispatch.claimAll(s, T0 + HOUR, seededRng(1)).n, 0);
+  assert.strictEqual(s.coin, coin);
+  assert.strictEqual(s.dispatch.active.length, 1);
+});
+
+test('rushing an errand costs Stardust in proportion to the time left', () => {
+  const s = openDispatch();
+  const j = s.dispatch.board[0];
+  j.mins = 240;
+  Dispatch.send(s, j.id, 'zhou', T0);
+  assert.strictEqual(Dispatch.rush(s, 0, T0), false, 'not enough Stardust');
+  s.stardust = Boosts.rushCost(240 * 60000);
+  assert.ok(Dispatch.rush(s, 0, T0));
+  assert.strictEqual(s.stardust, 0);
+  assert.strictEqual(Dispatch.ready(s, T0), 1);
+});
+
+test('letters arrive in order, without story spoilers', () => {
+  const s = E.defaultSave();
+  clearUpTo(s, 'c1h');
+  s.dispatch.done = 0;
+  s.dispatch.active = [
+    { doneAt: T0, ci: 0, reward: { coin: 1, xp: 1, herbs: {}, items: {}, dust: 0, spirits: 0, bonus: 0 } },
+    { doneAt: T0, ci: 0, reward: { coin: 1, xp: 1, herbs: {}, items: {}, dust: 0, spirits: 0, bonus: 0 } },
+  ];
+  const r = Dispatch.claimAll(s, T0, seededRng(9));
+  assert.strictEqual(r.letters.length, 1);
+  assert.strictEqual(W.LETTERS[r.letters[0]].after <= 1, true);
+  assert.strictEqual(s.letters.unread, 1);
+  W.LETTERS.forEach((l, i) => {
+    if (l.ending) assert.ok(l.after === 6 && !s.letters.got.includes(i), 'ending letters wait for the ending');
+  });
+});
+
+test('crops ripen on real time, and each is picked once', () => {
+  const s = E.defaultSave();
+  assert.ok(Garden.plant(s, 0, 'wood', T0));
+  assert.strictEqual(Garden.plant(s, 0, 'fire', T0), false, 'plot is taken');
+  assert.strictEqual(Garden.harvest(s, T0).n, 0);
+  assert.strictEqual(Garden.stage(s.garden.plots[0], T0), 0);
+  const t = T0 + W.CROPS.wood.mins * 60000;
+  assert.strictEqual(Garden.stage(s.garden.plots[0], t), 2);
+  const r = Garden.harvest(s, t);
+  assert.strictEqual(r.n, 1);
+  assert.strictEqual(s.herbs.wood, W.CROPS.wood.yield);
+  assert.strictEqual(Garden.harvest(s, t).n, 0);
+});
+
+test('plots open up as the journey goes on', () => {
+  const s = E.defaultSave();
+  const n = Garden.plotCount(s);
+  assert.strictEqual(Garden.plant(s, n, 'wood', T0), false, 'locked plot');
+  clearUpTo(s, 'c1h');
+  assert.strictEqual(Garden.plotCount(s), n + 1);
+  assert.ok(Garden.plant(s, n, 'wood', T0));
+});
+
+test('neighbours matter: generating helps, overcoming hurts, and the order of picking does not', () => {
+  const s = E.defaultSave();
+  Garden.plant(s, 1, 'wood', T0);
+  const alone = Garden.yieldOf(s, 1);
+  Garden.plant(s, 0, 'water', T0); // Water feeds wood.
+  const helped = Garden.yieldOf(s, 1);
+  assert.ok(helped > alone);
+  Garden.plant(s, 2, 'metal', T0); // Metal cuts wood, cancelling the help.
+  assert.strictEqual(Garden.yieldOf(s, 1), alone);
+  const later = T0 + 400 * 60000;
+  const y = [0, 1, 2].map((i) => Garden.yieldOf(s, i));
+  const r = Garden.harvest(s, later);
+  assert.strictEqual(r.gained.water, y[0]);
+  assert.strictEqual(r.gained.wood, y[1]);
+  assert.strictEqual(r.gained.metal, y[2]);
+});
+
+test('a harvest never yields less than one', () => {
+  const s = E.defaultSave();
+  s.garden.plots[4] = { el: 'wood', doneAt: T0, at: T0 };
+  [1, 3, 5, 7].forEach((i) => { s.garden.plots[i] = { el: 'metal', doneAt: T0, at: T0 }; });
+  assert.strictEqual(Garden.bonusOf(s, 4), -1);
+  assert.strictEqual(Garden.yieldOf(s, 4), 1);
+});
+
+test('free watering has a cooldown, and star dew is priced by the slowest crop', () => {
+  const s = E.defaultSave();
+  Garden.plant(s, 0, 'water', T0);
+  const done = s.garden.plots[0].doneAt;
+  assert.ok(Garden.water(s, T0));
+  assert.strictEqual(s.garden.plots[0].doneAt, done - 30 * 60000);
+  assert.strictEqual(Garden.water(s, T0 + 60000), false);
+  assert.ok(Garden.canWater(s, T0 + 5 * HOUR));
+  const cost = Garden.rushCost(s, T0);
+  assert.ok(cost > 0);
+  assert.strictEqual(Garden.rush(s, T0), false);
+  s.stardust = cost;
+  assert.ok(Garden.rush(s, T0));
+  assert.strictEqual(Garden.ripeCount(s, T0), 1);
+  assert.strictEqual(Garden.rushCost(s, T0), 0);
+});
+
+test('cooking spends herbs, makes items and sets a meal that wears off on the road', () => {
+  const s = E.defaultSave();
+  assert.strictEqual(Garden.cook(s, 'pill'), false, 'no herbs');
+  s.herbs = { wood: 10, fire: 10, earth: 10, metal: 10, water: 10 };
+  const pills = s.items.pill;
+  assert.ok(Garden.cook(s, 'pill'));
+  assert.strictEqual(s.items.pill, pills + 2);
+  assert.strictEqual(s.herbs.wood, 8);
+  assert.ok(Garden.cook(s, 'meal_xp'));
+  assert.strictEqual(s.idle.meal, 'xp');
+  const base = Idle.rates(E.defaultSave(), T0).xp;
+  assert.ok(Idle.rates(s, T0).xp > base * 1.2);
+  Idle.sync(s, T0);
+  Idle.sync(s, T0 + 9 * HOUR);
+  assert.strictEqual(s.idle.mealSecs, 0, 'eight hours later it is gone');
+  assert.ok(Math.abs(Idle.rates(s, T0).xp - base) < 0.001, 'and the rate is back to normal');
+});
+
+test('every floor of the sky stair is a valid fight, and bosses mark every tenth', () => {
+  for (let f = 1; f <= 120; f++) {
+    const spec = Tower.floorSpec(f);
+    assert.ok(spec.foes.length >= 1);
+    spec.foes.forEach((id) => assert.ok(G.MONSTERS[id], `floor ${f}: ${id}`));
+    if (f % 10 === 0) assert.ok(G.MONSTERS[spec.foes[0]].boss, `floor ${f} is a boss`);
+    else assert.ok(spec.foes.every((id) => !G.MONSTERS[id].boss), `floor ${f} has no boss`);
+    assert.ok(Tower.reward(f).dust > 0);
+  }
+});
+
+test('a floor pays only the first time, and only in order', () => {
+  const s = E.defaultSave();
+  assert.strictEqual(Tower.win(s, 5), null, 'cannot skip ahead');
+  const r = Tower.win(s, 1);
+  assert.ok(r);
+  const d = s.stardust;
+  assert.strictEqual(s.tower.best, 1);
+  assert.strictEqual(Tower.win(s, 1), null);
+  assert.strictEqual(s.stardust, d);
+  assert.strictEqual(d, Tower.reward(1).dust);
+});
+
+test('free rolls refill up to a small cap, and rolls earned by walking stack above it', () => {
+  const s = E.defaultSave();
+  s.wander.rolls = 0;
+  Wander.regen(s, T0);
+  assert.strictEqual(s.wander.rolls, 0);
+  Wander.regen(s, T0 + Wander.REGEN_MS);
+  assert.strictEqual(s.wander.rolls, 1);
+  Wander.regen(s, T0 + 100 * Wander.REGEN_MS);
+  assert.strictEqual(s.wander.rolls, Wander.FREE_CAP);
+  s.wander.rolls += 5;
+  Wander.regen(s, T0 + 200 * Wander.REGEN_MS);
+  assert.strictEqual(s.wander.rolls, Wander.FREE_CAP + 5);
+});
+
+test('a roll moves the courier, pays out, and needs a roll to spend', () => {
+  const s = E.defaultSave();
+  clearUpTo(s, 'c2b');
+  s.wander.rolls = 1;
+  s.wander.regen = T0 + HOUR;
+  const r = Wander.roll(s, T0, seededRng(4));
+  assert.ok(r.die >= 1 && r.die <= 6);
+  assert.ok(W.TILES[r.tile]);
+  assert.notStrictEqual(r.tile, 'fork', 'a shortcut lands somewhere real');
+  assert.strictEqual(s.wander.pos, r.to);
+  assert.strictEqual(s.wander.rolls, r.rolls || 0);
+  s.wander.rolls = 0;
+  assert.strictEqual(Wander.roll(s, T0, seededRng(4)), null);
+});
+
+test('every tile pays what it promises, and going round pays a bonus', () => {
+  const s = E.defaultSave();
+  clearUpTo(s, 'c2b');
+  s.wander.regen = T0 + HOUR;
+  s.wander.rolls = 500;
+  let laps = 0;
+  const seen = new Set();
+  const rng = seededRng(77);
+  for (let i = 0; i < 400; i++) {
+    const before = s.stardust;
+    const r = Wander.roll(s, T0, rng);
+    seen.add(r.tile);
+    if (r.lapped) {
+      laps++;
+      assert.strictEqual(s.stardust, before + Wander.LAP_DUST + (r.dust || 0));
+    }
+    if (r.coin) assert.ok(r.coin > 0);
+    assert.ok(s.wander.pos >= 0 && s.wander.pos < W.BOARD.length);
+  }
+  assert.strictEqual(s.wander.laps, laps);
+  assert.ok(laps > 10);
+  ['coin', 'xp', 'herb', 'spirit', 'item', 'dust', 'inn', 'wind', 'shrine'].forEach((t) => assert.ok(seen.has(t), t));
+});
+
+test('the shrine doubles the next stop', () => {
+  const s = E.defaultSave();
+  clearUpTo(s, 'c2b');
+  s.wander.rolls = 2;
+  s.wander.regen = T0 + HOUR;
+  // Stand three short of the shrine, then land on it and on the stop after with a fixed die.
+  s.wander.pos = W.BOARD.indexOf('shrine') - 1;
+  let n = 0;
+  const seq = [0, 0, 0, 0.5, 0.5, 0.5];
+  const rng = () => seq[n++ % seq.length];
+  const a = Wander.roll(s, T0, rng);
+  assert.strictEqual(a.tile, 'shrine');
+  assert.strictEqual(s.wander.bonus, true);
+  const b = Wander.roll(s, T0, rng);
+  assert.strictEqual(s.wander.bonus, false);
+  if (b.coin) assert.strictEqual(b.coin, Math.round(G.coinPerMin(Idle.stageLevel(s)) * Wander.TILE_MINS * 2));
+});
+
+test('daily errands reset each day and pay once, and the bonus needs no walking', () => {
+  const s = E.defaultSave();
+  const day = 100;
+  assert.strictEqual(Daily.claim(s, 'collect', day), 0, 'not done yet');
+  Daily.mark(s, 'collect', day);
+  assert.strictEqual(Daily.claim(s, 'collect', day), 25);
+  assert.strictEqual(Daily.claim(s, 'collect', day), 0);
+  ['train', 'dispatch', 'garden'].forEach((id) => { Daily.mark(s, id, day); Daily.claim(s, id, day); });
+  assert.strictEqual(s.steps.total, 0);
+  assert.ok(Daily.bonusReady(s, day), 'four errands earn the bonus without a single real step');
+  assert.strictEqual(Daily.claimBonus(s, day), W.DAILY_BONUS.dust);
+  assert.strictEqual(Daily.claimBonus(s, day), 0);
+  Daily.ensure(s, day + 1);
+  assert.strictEqual(Daily.claimedCount(s, day + 1), 0);
+  assert.strictEqual(Daily.bonusReady(s, day + 1), false);
+});
+
+test('the walking errand is a separate extra', () => {
+  const s = E.defaultSave();
+  const day = 100;
+  assert.strictEqual(Daily.claimWalk(s, day), 0);
+  s.steps.lastView = { today: { day, steps: 1000 } };
+  assert.strictEqual(Daily.claimWalk(s, day), 0);
+  s.steps.lastView.today.steps = W.DAILY_WALK.steps;
+  assert.strictEqual(Daily.claimWalk(s, day), W.DAILY_WALK.dust);
+  assert.strictEqual(Daily.claimWalk(s, day), 0);
+  assert.strictEqual(Daily.claimedCount(s, day), 0, 'it does not count toward the daily bonus');
+});
+
+test('hand-played repeat fights are worth having, up to a daily allowance', () => {
+  const s = E.defaultSave();
+  clearUpTo(s, 'c1a');
+  const foes = [P.enemyUnit('vine', 1, 0)];
+  const first = E.nodeRewards(s, foes, 'c1a', 100);
+  for (let i = 0; i < E.REPLAY_LIMIT; i++) E.nodeRewards(s, foes, 'c1a', 100);
+  const late = E.nodeRewards(s, foes, 'c1a', 100);
+  assert.ok(late.coin < first.coin * 0.2);
+  const nextDay = E.nodeRewards(s, foes, 'c1a', 101);
+  assert.strictEqual(nextDay.coin, first.coin);
+});
+
+test('a first clear pays much more than a repeat', () => {
+  const s = E.defaultSave();
+  const foes = [P.enemyUnit('vine', 1, 0)];
+  const first = E.nodeRewards(s, foes, 'c1a', 100);
+  E.clearNode(s, 'c1a');
+  const repeat = E.nodeRewards(s, foes, 'c1a', 100);
+  assert.ok(first.coin > repeat.coin * 3);
+  assert.ok(first.dust > 0);
+  assert.strictEqual(repeat.dust, 0);
+});
+
+test('features open as the road is walked', () => {
+  const s = E.defaultSave();
+  Object.keys(W.UNLOCKS).forEach((f) => assert.strictEqual(E.unlocked(s, f), false, f));
+  clearUpTo(s, 'c1b');
+  assert.ok(E.unlocked(s, 'dispatch'));
+  assert.strictEqual(E.unlocked(s, 'garden'), false);
+});
+
+test('the save stays small enough for cloud backup, even after a long game', () => {
+  const { run, PROFILES } = require('./simulate.js');
+  const r = run(4242, PROFILES.typical);
+  assert.ok(JSON.stringify(r.s).length < 60 * 1024, `${JSON.stringify(r.s).length} bytes`);
 });
 
 // ---- Combat ----
@@ -522,18 +1221,6 @@ test('every battle ends: no infinite loops across all encounters', () => {
   }));
 });
 
-test('balance: the campaign can be finished at every activity level', () => {
-  const { run } = require('./simulate.js');
-  const days = {};
-  [0, 4000, 7000, 12000].forEach((steps) => {
-    const r = run(1234, steps, 8);
-    assert.ok(r.finished, `${steps} steps/day did not finish`);
-    days[steps] = r.days;
-  });
-  assert.ok(days[7000] < days[4000] && days[4000] < days[0], 'walking more must finish sooner: ' + JSON.stringify(days));
-  assert.ok(days[0] >= days[7000] * 2, 'walking must matter: ' + JSON.stringify(days));
-});
-
 // ---- Content integrity ----
 test('all data references resolve', () => {
   Object.values(G.HEROES).forEach((h) => h.skills.forEach(([id]) => assert.ok(G.SKILLS[id], id)));
@@ -558,6 +1245,74 @@ test('all data references resolve', () => {
     Object.keys(c.items || {}).forEach((k) => assert.ok(G.ITEMS[k], k));
     (c.fight ? c.fight.foes : []).forEach((f) => assert.ok(G.MONSTERS[f], f));
   }));
+});
+
+test('all activity content resolves: errands, crops, recipes, stops, looks and icons', () => {
+  const icon = (n) => assert.ok(ICONS[n], 'icon ' + n);
+  W.COURIERS.forEach((c) => { assert.ok(G.ELEMENTS[c.el], c.id); assert.ok(c.head && c.head.hair !== undefined, c.id); });
+  W.JOBS.forEach((list) => list.forEach((j) => assert.ok(G.ELEMENTS[j.el], j.title)));
+  assert.strictEqual(W.JOBS.length, CHAPTERS.length);
+  W.CROP_ORDER.forEach((el) => { assert.ok(W.CROPS[el], el); assert.ok(G.ELEMENTS[el], el); icon('herb_' + el); });
+  assert.strictEqual(W.CROP_ORDER.length, Object.keys(G.ELEMENTS).length);
+  Object.values(W.RECIPES).forEach((r) => {
+    icon(r.icon);
+    Object.keys(r.herbs).forEach((el) => assert.ok(W.CROPS[el], el));
+    Object.keys(r.gives || {}).forEach((k) => assert.ok(G.ITEMS[k], k));
+    if (r.meal) assert.ok(W.MEALS[r.meal], r.meal);
+  });
+  Object.values(W.MEALS).forEach((m) => icon(m.icon));
+  W.BOARD.forEach((t) => { assert.ok(W.TILES[t], t); icon(W.TILES[t].icon); });
+  assert.strictEqual(W.BOARD.length, 24, 'the board must match its 6 x 8 layout on screen');
+  Object.values(W.BOOSTS).forEach((b) => icon(b.icon));
+  Object.values(W.BLESSINGS).forEach((b) => icon(b.icon));
+  Object.values(G.ITEMS).forEach((it) => icon(it.icon));
+  const { PETS } = require('../js/art/heroes.js');
+  Object.entries(W.COSMETICS).forEach(([id, c]) => {
+    assert.ok(c.cost || c.steps || c.laps, id + ' has no way to get it');
+    if (c.kind === 'outfit') assert.ok(G.HEROES[c.hero] && c.pal, id);
+    if (c.kind === 'pet') assert.ok(PETS[c.pet], id);
+    if (c.kind === 'decor') icon(c.icon);
+  });
+  Object.values(W.UNLOCKS).forEach((u) => assert.ok(NODE_INDEX[u.node], u.node));
+  assert.ok(FLAT.length > 40);
+});
+
+test('every hero pose, outfit and creature can be drawn', () => {
+  const { heroGrid, POSE_NAMES, PETS, PORTRAITS, courierHead } = require('../js/art/heroes.js');
+  const { monsterGrid } = require('../js/art/monsters.js');
+  G.HERO_ORDER.forEach((id) => POSE_NAMES.forEach((pose) => {
+    assert.ok(heroGrid(id, pose).d.some((c) => c !== -1), `${id} ${pose}`);
+  }));
+  Object.values(W.COSMETICS).forEach((c) => { if (c.pal) assert.ok(heroGrid(c.hero, 'walk0', c.pal)); });
+  Object.keys(PETS).forEach((k) => { assert.ok(PETS[k](0)); assert.ok(PETS[k](1)); });
+  Object.keys(PORTRAITS).forEach((k) => assert.ok(PORTRAITS[k]()));
+  W.COURIERS.forEach((c) => assert.ok(courierHead(c.head)));
+  Object.values(G.MONSTERS).forEach((m) => assert.ok(monsterGrid(m.art).d.some((c) => c !== -1), m.name));
+  const scenery = require('../js/art/scenery.js');
+  ['spring', 'summer', 'loess', 'autumn', 'winter', 'void'].forEach((t) => {
+    ['clouds', 'far', 'mid', 'near'].forEach((l) => assert.ok(scenery.layerGrid(t, l, 80).d.some((c) => c !== -1), t + l));
+    assert.ok(scenery.groundGrid(t, 256, 60, true).opaque(), t + ' ground');
+    assert.ok(scenery.skyGrid(t, 100, 80).opaque(), t + ' sky');
+    assert.ok(scenery.foreLayer(t, 20));
+  });
+});
+
+test('parallax layers repeat with no seam', () => {
+  const scenery = require('../js/art/scenery.js');
+  const { Grid } = require('../js/core/paint.js');
+  ['spring', 'summer', 'loess', 'autumn', 'winter', 'void'].forEach((t) => {
+    ['far', 'mid'].forEach((l) => {
+      const g = scenery.layerGrid(t, l, 80);
+      assert.ok(g instanceof Grid && g.wrap, t + l);
+      // Compare the top of the ridge line on the two sides of the join.
+      const topAt = (x) => {
+        for (let y = 0; y < g.h; y++) if (g.get(x, y) !== -1) return y;
+        return g.h;
+      };
+      const jump = Math.abs(topAt(0) - topAt(g.w - 1));
+      if (t !== 'void') assert.ok(jump <= 8, `${t} ${l} seam jumps ${jump}px`);
+    });
+  });
 });
 
 test('nothing from the inspiring game appears anywhere in the source or story', () => {
@@ -588,6 +1343,12 @@ test('no eval or new Function, which WeChat forbids', () => {
     assert.ok(!/\beval\s*\(/.test(src), f);
     assert.ok(!/new\s+Function\s*\(/.test(src), f);
   });
+});
+
+test('the game source stays in one small package budget for art code', () => {
+  // All art is drawn in code, so its code is its whole footprint in the package.
+  const art = walk(path.join(ROOT, 'js/art')).reduce((n, f) => n + fs.statSync(f).size, 0);
+  assert.ok(art < 150 * 1024, `art code is ${(art / 1024).toFixed(0)} KB`);
 });
 
 test('no browser-only globals in game code', () => {

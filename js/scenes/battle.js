@@ -15,9 +15,12 @@ const { Particles, Weather } = require('../core/fx.js');
 const { TIPS } = require('../data/story.js');
 const { UI } = require('../core/palette.js');
 const { dipperPoints } = require('../art/scenery.js');
+const Idle = require('../systems/idle.js');
+const Tower = require('../systems/tower.js');
+const clock = require('../core/clock.js');
 
 const { W, H } = D;
-const PANEL_H = 198;
+const PANEL_H = 176;
 const STATUS_KEYS = Object.keys(G.STATUS);
 
 class BattleScene {
@@ -50,7 +53,6 @@ class BattleScene {
     this.actor = null;
     this.pending = null;
     this.result = null;
-    this.bg = art.battleBg(this.chapter.theme, W, this.fieldH);
   }
   enter() {
     audio.bgm(this.isBoss ? 'boss' : 'battle');
@@ -58,11 +60,11 @@ class BattleScene {
   }
   layout(heroes, enemies) {
     const f = this.fieldH;
-    const hs = { 1: [[0.8, 0.8]], 2: [[0.76, 0.7], [0.88, 0.88]], 3: [[0.74, 0.66], [0.9, 0.78], [0.74, 0.93]] }[heroes.length];
+    const hs = { 1: [[0.8, 0.8]], 2: [[0.74, 0.72], [0.88, 0.88]], 3: [[0.72, 0.68], [0.89, 0.8], [0.72, 0.93]] }[heroes.length];
     heroes.forEach((u, i) => {
       this.vis[u.key] = { x: W * hs[i][0], y: f * hs[i][1], ox: 0, oy: 0, flash: 0, a: 1, pose: 'idle', poseT: 0 };
     });
-    const es = { 1: [[0.3, this.isBossCheck(enemies) ? 0.88 : 0.8]], 2: [[0.2, 0.68], [0.38, 0.9]], 3: [[0.17, 0.66], [0.42, 0.78], [0.17, 0.95]] }[enemies.length];
+    const es = { 1: [[0.3, this.isBossCheck(enemies) ? 0.9 : 0.8]], 2: [[0.2, 0.68], [0.38, 0.87]], 3: [[0.17, 0.64], [0.42, 0.75], [0.17, 0.89]] }[enemies.length];
     enemies.forEach((u, i) => {
       this.vis[u.key] = { x: W * es[i][0], y: f * es[i][1], ox: 0, oy: 0, flash: 0, a: 1, pose: 'idle', poseT: 0, seed: i };
     });
@@ -147,6 +149,10 @@ class BattleScene {
       case 'use': {
         const v = this.vis[e.actor.key];
         this.log = `${e.actor.name} · ${e.name}`;
+        if (e.pose === 'atk' && e.actor.side === 'hero') {
+          this.setPose(e.actor, 'windup', 0.14);
+          yield 0.11;
+        }
         if (e.pose) this.setPose(e.actor, e.pose, 0.5);
         const dir = e.actor.side === 'hero' ? -1 : 1;
         v.ox = dir * (e.pose === 'atk' || e.pose === 'thrust' ? 16 : 6);
@@ -343,9 +349,10 @@ class BattleScene {
     if (u.side === 'hero') {
       const v = this.vis[u.key];
       const pf = pose || (v.pose === 'idle' ? (Math.floor(game.t * 1.6 + u.key.charCodeAt(0)) % 2 ? 'idle1' : 'idle0') : v.pose);
-      return art.hero(u.id, u.alive ? pf : 'ko');
+      const outfit = store.get().heroes[u.id] && store.get().heroes[u.id].outfit;
+      return art.hero(u.id, u.alive ? pf : 'ko', outfit);
     }
-    return art.monster(u.def_.art);
+    return art.monster(u.def_.art, u.alive && !this.b.outcome ? Math.floor(game.t * 2.2 + (this.vis[u.key].seed || 0)) % 2 : 0);
   }
   // ---- Battle end ----
   *finish() {
@@ -353,7 +360,7 @@ class BattleScene {
     const b = this.b;
     if (b.outcome === 'fled') {
       store.persist();
-      game.go('map', { chapter: this.ci, focus: this.p.focus });
+      this.goBack();
       return;
     }
     if (b.outcome === 'lose') {
@@ -367,36 +374,49 @@ class BattleScene {
     audio.bgm(null);
     audio.sfx('win');
     const nodeId = this.node && this.node.id;
-    const rw = E.battleRewards(s, this.all, nodeId);
+    let rw;
+    if (this.p.tower) {
+      const t = Tower.win(s, this.p.tower);
+      rw = t ? { xp: t.reward.xp, coin: t.reward.coin, dust: t.reward.dust, drops: t.reward.items, ups: t.ups } : { xp: 0, coin: 0, dust: 0, drops: {}, ups: [] };
+    } else rw = E.battleRewards(s, this.all, nodeId, Idle.dayOf(clock.now()));
     if (b.sealed.length) {
       E.addSpirits(s, b.sealed);
       O.tip('seal', TIPS.seal);
     }
     let lit = false;
     if (this.node) lit = E.clearNode(s, nodeId).litStar;
+    if (s.idle.blocked) Idle.nudge(s);
     store.persist();
     if (rw.ups.length) audio.sfx('level');
     this.result = { rw, lit, sealed: b.sealed };
     this.mode = 'result';
   }
+  // Back to wherever the fight was started from.
+  goBack() {
+    const from = this.p.from;
+    if (from === 'tower') return game.go('tower');
+    if (from === 'map') return game.go('map', { chapter: this.ci, focus: this.p.focus });
+    return game.go('road');
+  }
   leaveWin() {
     const s = store.get();
     const node = this.node;
     if (this.p.resume) {
-      return game.go('map', { chapter: this.ci, focus: this.p.focus, after: this.p.resume.win });
+      return game.go(this.p.from === 'map' ? 'map' : 'road', this.p.from === 'map' ? { chapter: this.ci, focus: this.p.focus, after: this.p.resume.win } : { after: this.p.resume.win });
     }
+    if (this.p.tower) return this.goBack();
     const back = () => {
       if (node.id === 'c1h') {
         E.joinHero(s, 'zhuo');
         store.persist();
       }
       if (node.after === 'final') return game.go('ending');
-      const nextChapter = s.progress.chapter;
-      const moved = nextChapter !== this.ci && nextChapter > this.ci && this.result.lit;
-      game.go('map', { chapter: moved ? nextChapter : this.ci, focus: moved ? undefined : this.p.focus });
+      const moved = s.progress.chapter > this.ci && this.result.lit;
+      if (moved && this.p.from === 'map') return game.go('map', { chapter: s.progress.chapter });
+      return this.goBack();
     };
-    if (node.after && node.after !== 'final') O.story(node.after, back);
-    else back();
+    if (node.after && node.after !== 'final') return O.story(node.after, back);
+    return back();
   }
   // ---- Input ----
   choose(action) {
@@ -433,9 +453,8 @@ class BattleScene {
       if (v.ko > 1) return;
     }
     const a = this.artOf(u);
-    const bob = u.side === 'enemy' && u.alive && !u.boss ? Math.round(Math.sin(game.t * 2.4 + (v.seed || 0)) * 1.2) : 0;
     const x = Math.round(v.x + v.ox - a.w / 2);
-    const y = Math.round(v.y + v.oy - a.h + bob);
+    const y = Math.round(v.y + v.oy - a.h) + (u.side === 'hero' ? 3 : 0);
     ui.alpha(0.3);
     const sw = Math.round(Math.min(a.w, 90) * 0.7);
     ui.rect(v.x - sw / 2, v.y - 2, sw, 3, '#000000');
@@ -446,14 +465,14 @@ class BattleScene {
       v.sealing = Math.max(0.05, v.sealing - 0.03);
       const k = v.sealing;
       ui.alpha(k);
-      ui.imgScaled(a.cv, v.x - (a.w * k) / 2, v.y - a.h * k, a.w * k, a.h * k);
+      ui.imgScaled(a, v.x - (a.w * k) / 2, v.y - a.h * k, a.w * k, a.h * k);
       ui.alpha(1);
       return;
     }
-    ui.img(a.cv, x, y);
+    ui.img(a, x, y);
     if (v.flash > 0) {
       ui.alpha(Math.min(1, v.flash * 1.4));
-      ui.img(a.white, x, y);
+      ui.img(a.white(), x, y);
       ui.alpha(1);
     }
     ui.alpha(1);
@@ -556,9 +575,10 @@ class BattleScene {
   }
   drawCommands() {
     const m = 6;
-    const y0 = this.fieldH + 5 + 19 * 3 + 2;
     const w = W - m * 2;
     const bottom = H - D.safeBottom - 4;
+    // Anchored to the bottom, so the buttons stay under the thumb however tall the phone is.
+    const y0 = bottom - 24 - 3 - 33 - 3 - 33 - 2;
     const s = store.get();
     const a = this.actor;
     const cols = 3, gap = 3;
@@ -661,13 +681,14 @@ class BattleScene {
       ui.para(TIPS.lost, x + 14, y + 34, w - 28, UI.text);
       ui.button('lose-retry', x + 14, y + h - 66, w - 28, 26, { label: '再战一次', kind: 'danger', onTap: () => game.go('battle', this.p) });
       const half = Math.floor((w - 32) / 2);
-      ui.button('lose-altar', x + 14, y + h - 36, half, 26, { label: '去步虚台', kind: 'jade', onTap: () => game.go('altar') });
-      ui.button('lose-train', x + 18 + half, y + h - 36, half, 26, { label: '去修炼', onTap: () => game.go('party', { from: 'map' }) });
+      ui.button('lose-back', x + 14, y + h - 36, half, 26, { label: '回到路上', onTap: () => this.goBack() });
+      ui.button('lose-train', x + 18 + half, y + h - 36, half, 26, { label: '去修炼', kind: 'jade', onTap: () => game.go('party') });
       return;
     }
     const rows = [];
-    rows.push({ label: '经验', value: `+${ui.fmt(r.rw.xp)}`, c: UI.jade });
-    if (r.rw.dust) rows.push({ label: '星砂', value: `+${ui.fmt(r.rw.dust)}`, c: UI.gold });
+    if (r.rw.xp) rows.push({ label: '阅历', value: `+${ui.fmt(r.rw.xp)}`, c: UI.jade });
+    if (r.rw.coin) rows.push({ label: '铜钱', value: `+${ui.fmt(r.rw.coin)}`, c: UI.gold });
+    if (r.rw.dust) rows.push({ label: '星砂', value: `+${ui.fmt(r.rw.dust)}`, c: UI.blue });
     Object.keys(r.rw.drops).forEach((k) => rows.push({ label: G.ITEMS[k].name, value: `×${r.rw.drops[k]}`, c: UI.text }));
     r.sealed.forEach((id) => rows.push({ label: `${G.MONSTERS[id].name}之灵`, value: '已封印', c: UI.violet }));
     r.rw.ups.forEach((u) => rows.push({ label: `${G.HEROES[u.id].name} 升级`, value: `Lv ${u.lv}`, c: UI.peach }));
@@ -685,7 +706,7 @@ class BattleScene {
     const shakeX = this.shake > 0 ? Math.round((Math.random() - 0.5) * this.shake) : 0;
     const shakeY = this.shake > 0 ? Math.round((Math.random() - 0.5) * this.shake) : 0;
     ui.setClip(0, 0, W, this.fieldH);
-    ui.ctx.drawImage(this.bg, shakeX, shakeY);
+    ui.ctx.drawImage(art.battleBg(this.chapter.theme, W, this.fieldH), shakeX, shakeY);
     ui.state.clip = null;
     this.weather.draw(this.fieldH);
     if (this.dim) {
