@@ -1,0 +1,17 @@
+{
+  "name": "buxulu",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Developer tooling for the 步虚录 WeChat mini-game. Nothing here ships in the game package.",
+  "scripts": {
+    "test": "node tests/run.js",
+    "e2e": "node tests/e2e.js",
+    "preview": "node tools/bundle.js game.js dist/preview",
+    "audio": "node tools/gen_audio.js"
+  },
+  "devDependencies": {
+    "acorn": "^8.14.0",
+    "lamejs": "^1.2.1",
+    "playwright-core": "1.62.1"
+  }
+}

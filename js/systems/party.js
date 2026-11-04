@@ -1,0 +1,73 @@
+// Turns save data into combat units. Pure logic with no dependency on the WeChat runtime.
+const D = require('../data/game.js');
+
+function relicMods(heroSave, save) {
+  const mods = {};
+  (heroSave.relics || []).forEach((uid) => {
+    if (!uid) return;
+    const item = save.relics.find((r) => r.uid === uid);
+    if (!item) return;
+    const def = D.RELICS[item.type];
+    mods[def.stat] = (mods[def.stat] || 0) + def.values[item.rank];
+    if (def.extra) Object.keys(def.extra).forEach((k) => { mods[k] = (mods[k] || 0) + def.extra[k]; });
+  });
+  return mods;
+}
+
+function heroStats(save, id) {
+  const def = D.HEROES[id];
+  const hs = save.heroes[id];
+  const lv = hs.lv;
+  const m = relicMods(hs, save);
+  const t = hs.train;
+  const grow = (k) => def.base[k] + def.grow[k] * (lv - 1);
+  // Star relics lit so far strengthen the whole party a little.
+  const star = 1 + (save.progress.stars || 0) * 0.015;
+  return {
+    hp: Math.round(grow('hp') * (1 + t.hp * D.TRAIN.hp.pct + (m.hpPct || 0)) * star),
+    mp: Math.round(grow('mp')),
+    atk: Math.round(grow('atk') * (1 + t.atk * D.TRAIN.atk.pct + (m.atkPct || 0)) * star),
+    def: Math.round(grow('def') * (1 + t.def * D.TRAIN.def.pct + (m.defPct || 0)) * star),
+    spd: Math.round(grow('spd') * (1 + t.spd * D.TRAIN.spd.pct + (m.spdPct || 0)) * 10) / 10,
+    mods: m,
+  };
+}
+
+function learned(id, lv) {
+  return D.HEROES[id].skills.filter((s) => lv >= s[1]).map((s) => s[0]);
+}
+
+function heroUnit(save, id, index) {
+  const s = heroStats(save, id);
+  const def = D.HEROES[id];
+  return {
+    id, key: id + index, side: 'hero', name: def.name, el: def.el, lv: save.heroes[id].lv,
+    maxHp: s.hp, hp: s.hp, maxMp: s.mp, mp: s.mp, atk: s.atk, def: s.def, spd: s.spd,
+    mods: s.mods, skills: learned(id, save.heroes[id].lv), statuses: {}, ct: Math.random() * 30, alive: true,
+  };
+}
+
+// Enemy strength follows a shared curve, so each creature only has to state its personality.
+function enemyUnit(id, lv, index) {
+  const m = D.MONSTERS[id];
+  const hp = Math.round((52 + 25 * lv) * m.hp);
+  return {
+    id, key: id + index, side: 'enemy', name: m.name, el: m.el, lv, def_: m,
+    maxHp: hp, hp, maxMp: 0, mp: 0,
+    atk: Math.round((12 + 4.7 * lv) * m.atk),
+    def: Math.round((4 + 1.7 * lv) * m.def),
+    spd: Math.round((10 + 0.35 * lv) * m.spd * 10) / 10,
+    mods: {}, skills: m.skills || [], statuses: {}, ct: Math.random() * 30, alive: true,
+    boss: !!m.boss, elite: !!m.elite, pattern: m.pattern, patternI: 0, phases: (m.phases || []).slice(),
+  };
+}
+
+function joined(save) {
+  return D.HERO_ORDER.filter((id) => save.heroes[id].joined);
+}
+
+function partyUnits(save) {
+  return joined(save).map((id, i) => heroUnit(save, id, i));
+}
+
+module.exports = { heroStats, learned, heroUnit, enemyUnit, partyUnits, joined, relicMods };
