@@ -78,8 +78,8 @@ class Ending {
   }
   draw() {
     if (this.theme === 'hub') {
-      ui.img(art.hub(W, H), 0, 0);
-      ui.img(art.peach(), W / 2 + 10, H - 34 - 66);
+      ui.ctx.drawImage(art.hub(W, H), 0, 0);
+      ui.img(art.peach(), W / 2 - 110, H * 0.3 + 6);
     } else ui.img(art.battleBg(this.theme, W, H), 0, 0);
     this.weather.draw();
     this.fx.draw();
@@ -94,21 +94,23 @@ class Ending {
     let y = Math.round(H * 0.22);
     ui.text(turned ? '—— 全书终 ——' : '—— 另一种结局 ——', W / 2, y, UI.gold, { align: 'c' });
     y += 34;
-    ui.text('这一路,你一共走了', W / 2, y, UI.text, { align: 'c' });
+    // Someone who walked sees their own steps. Someone who did not sees the road all the same.
+    const walked = s.steps.total > 0;
+    ui.text(walked ? '这一路,你一共走了' : '这一路,队伍一共走了', W / 2, y, UI.text, { align: 'c' });
     y += 18;
-    ui.numberBig(String(s.steps.total), W / 2, y, '#f7dd7a', 3);
+    ui.numberBig(String(walked ? s.steps.total : Math.floor(s.idle.li)), W / 2, y, '#f7dd7a', 3);
     y += 34;
-    ui.text('步', W / 2, y, UI.dim, { align: 'c' });
+    ui.text(walked ? '步' : '里', W / 2, y, UI.dim, { align: 'c' });
     y += 28;
     const line = turned
-      ? '每一步都是真的。谢谢你,一步一步走到了这里。'
+      ? (walked ? '每一步都是真的。谢谢你,一步一步走到了这里。' : '路已经走完了。谢谢你,陪他们走到了这里。')
       : '你随时可以回到北辰台,再选一次。斗柄还在那里。';
     y += ui.para(line, 26, y, W - 52, UI.text, { align: undefined });
     y += 14;
     ui.text('《步虚录》', W / 2, y, UI.dim, { align: 'c' });
     ui.alpha(1);
     if (c.t > 1.5) {
-      ui.button('ending-done', 36, H - D.safeBottom - 54, W - 72, 30, { label: '回到望星驿', kind: 'primary', onTap: () => game.go('hub') });
+      ui.button('ending-done', 36, H - D.safeBottom - 54, W - 72, 30, { label: '继续上路', kind: 'primary', onTap: () => game.go('road') });
     }
   }
 }

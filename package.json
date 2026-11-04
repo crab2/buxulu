@@ -1,8 +1,8 @@
 {
   "name": "buxulu",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
-  "description": "Developer tooling for the 步虚录 WeChat mini-game. Nothing here ships in the game package.",
+  "description": "Developer tooling for the 步虚录 WeChat idle mini-game. Nothing here ships in the game package.",
   "scripts": {
     "test": "node tests/run.js",
     "e2e": "node tests/e2e.js",

@@ -11,10 +11,15 @@ const O = require('./overlays.js');
 const { Weather, Particles } = require('../core/fx.js');
 const { UI, css, C } = require('../core/palette.js');
 const { dipperPoints } = require('../art/scenery.js');
+const { RoadView } = require('./road.js');
+const Idle = require('../systems/idle.js');
+const { CHAPTERS } = require('../data/chapters.js');
+const clock = require('../core/clock.js');
 const config = require('../config.js');
 
 const { W, H } = D;
 const WELCOME_DUST = 300;
+const WELCOME_COIN = 2000;
 
 function drawLogo(cx, y, k) {
   const str = '步虚录';
@@ -36,12 +41,19 @@ class Title {
     this.fall = [];
     this.next = 0.2;
     this.fx = new Particles();
+    // The party is already on the road behind the logo. It is an idle game, after all.
+    const s = store.get();
+    const ci = Idle.currentChapterIndex(s);
+    this.view = new RoadView(H, CHAPTERS[ci].theme);
+    this.view.setParty(s);
+    this.view.pool = [];
   }
   enter() {
     audio.bgm('title');
   }
   update(dt) {
     this.t += dt;
+    this.view.update(dt, 1);
     this.fx.update(dt);
     this.next -= dt;
     if (this.next <= 0) {
@@ -58,10 +70,10 @@ class Title {
   start() {
     const s = store.get();
     audio.sfx('star');
-    game.go(s.flags.intro ? 'hub' : 'intro');
+    game.go(s.flags.intro ? 'road' : 'intro');
   }
   draw() {
-    ui.img(art.hub(W, H), 0, 0);
+    this.view.draw(clock.now());
     const pts = dipperPoints(W * 0.62, D.contentTop + 22, W * 0.5);
     pts.forEach((q, i) => {
       if (i) {
@@ -76,12 +88,12 @@ class Title {
       if (on) ui.rect(q[0], q[1], 1, 1, '#ffffff');
     });
     this.fx.draw();
-    const logoY = Math.round(H * 0.32);
+    const logoY = Math.round(H * 0.24);
     drawLogo(W / 2, logoY + Math.round(Math.sin(this.t * 1.2) * 2), 3);
-    ui.text('足下千里 · 气通北斗', W / 2, logoY + 50, '#d9c9a3', { align: 'c', outline: true });
-    if (Math.floor(this.t * 1.6) % 2 === 0) ui.text('轻触开始', W / 2, H * 0.52, UI.text, { align: 'c', outline: true });
-    ui.text('把每天走的路,带进一个仙侠世界', W / 2, logoY + 66, UI.dim, { align: 'c', outline: true });
-    ui.text('v' + config.VERSION, W - 6, H - D.safeBottom - 15, UI.faint, { align: 'r', outline: true });
+    ui.text('足下千里 · 气通北斗', W / 2, logoY + 50, '#f2e9d0', { align: 'c', outline: true });
+    ui.text('人在哪里,路都替你走着', W / 2, logoY + 66, '#d9c9a3', { align: 'c', outline: true });
+    if (Math.floor(this.t * 1.6) % 2 === 0) ui.text('轻触开始', W / 2, H * 0.47, UI.text, { align: 'c', outline: true });
+    ui.text('v' + config.VERSION, W - 6, H - D.safeBottom - 15, UI.text, { align: 'r', outline: true });
     ui.hit('title-start', 0, 0, W, H, () => this.start(), { label: 'title-start', sound: null });
   }
 }
@@ -122,7 +134,7 @@ class Intro {
       // The stuck seasons, one after another.
       const seq = ['spring', 'summer', 'winter'];
       ui.img(art.battleBg(seq[Math.floor(this.t * 0.7) % 3], W, H), 0, 0);
-    } else if (kind === 'hub') ui.img(art.hub(W, H), 0, 0);
+    } else if (kind === 'hub') ui.ctx.drawImage(art.hub(W, H), 0, 0);
     else ui.img(art.battleBg(kind, W, H), 0, 0);
     this.fx.draw();
   }
@@ -178,19 +190,21 @@ class Reveal {
     const s = store.get();
     s.flags.intro = true;
     E.addDust(s, WELCOME_DUST);
+    E.addCoin(s, WELCOME_COIN);
+    s.idle.last = clock.now();
     store.persist();
     audio.sfx('coin');
     O.story(skipped ? 'no_steps' : 'blessing', () => {
       O.modal({
         title: '老驿丞的盘缠',
         text: '路上用。省着点花。',
-        rows: O.rewardRows({ dust: WELCOME_DUST }),
-        buttons: [{ label: '启程', kind: 'primary', onTap: () => game.go('hub') }],
+        rows: O.rewardRows({ coin: WELCOME_COIN, dust: WELCOME_DUST }),
+        buttons: [{ label: '启程', kind: 'primary', onTap: () => game.go('road') }],
       });
     });
   }
   draw() {
-    ui.img(art.hub(W, H), 0, 0);
+    ui.ctx.drawImage(art.hub(W, H), 0, 0);
     ui.alpha(0.55);
     ui.rect(0, 0, W, H, '#000000');
     ui.alpha(1);
@@ -201,8 +215,8 @@ class Reveal {
     if (this.phase === 'ask') {
       ui.panel(px, py, pw, 160);
       ui.para('星盘想读一读你的脚印。', px + 14, py + 14, pw - 28, UI.gold);
-      ui.para(`开启微信运动后,你走的每 10 步可兑换 1 星砂。过去七天走过的路,也能折半领取。`, px + 14, py + 34, pw - 28, UI.text);
-      ui.para('步数只用于兑换,不开启也能正常游戏。', px + 14, py + 86, pw - 28, UI.dim);
+      ui.para(`每走 10 步可兑换 1 星砂,能让路上走得更快、更舒坦。过去七天的路也能折半领取。`, px + 14, py + 34, pw - 28, UI.text);
+      ui.para('不开启也不耽误故事和进度。', px + 14, py + 86, pw - 28, UI.dim);
       ui.button('reveal-connect', px + 14, py + 108, pw - 28, 28, { label: '让星盘读取步数', kind: 'primary', onTap: () => this.connect() });
       ui.button('reveal-skip', px + 14, py + 138 - 2, pw - 28, 20, { label: '以后再说', kind: 'ghost', sound: 'back', onTap: () => this.depart(true) });
     } else if (this.phase === 'reading') {
@@ -228,37 +242,24 @@ class Reveal {
 function reasonText(status) {
   const S = steps.S;
   switch (status) {
-    case S.IDLE: return '开启微信运动后,每走 10 步可兑换 1 星砂,过去七天的路也能折半领取。步数只用于兑换。';
-    case S.PRIVACY_DENIED: return '你还没有同意隐私保护指引,星盘读不到步数。不影响游戏,以后可以在步虚台重新开启。';
-    case S.SCOPE_DENIED: return '你还没有授权读取微信运动。不影响游戏,以后可以在步虚台重新开启。';
+    case S.IDLE: return '开启微信运动后,每走 10 步可兑换 1 星砂,过去七天的路也能折半领取。不开启也不耽误进度。';
+    case S.PRIVACY_DENIED: return '你还没有同意隐私保护指引,星盘读不到步数。进度不受影响,以后可以在这里重新开启。';
+    case S.SCOPE_DENIED: return '你还没有授权读取微信运动。进度不受影响,以后可以在这里重新开启。';
     case S.NO_WERUN: return '读取失败。请先在微信里搜索“微信运动”并开启,然后再回来试试。';
     case S.NOT_DEPLOYED: return '这个版本还没有接入步数服务,暂时无法兑换。';
     default: return '网络开了个小差,星盘没能读到步数。已经走过的路不会丢,稍后再试就好。';
   }
 }
 
-// The star disc: a turning bronze ring set with seven stars.
+// The star disc: a turning bronze ring set with seven stars. The rings are one baked image, so only
+// the parts that move cost anything per frame.
 function drawDisc(cx, cy, r, spin, lit, busy) {
-  const ctx = ui.ctx;
-  const ring = (rad, col) => {
-    const n = Math.ceil(rad * 6.3);
-    for (let i = 0; i < n; i++) {
-      const a = (i / n) * Math.PI * 2;
-      ui.rect(cx + Math.cos(a) * rad, cy + Math.sin(a) * rad, 1, 1, col);
-    }
-  };
-  ctx.fillStyle = '#14121f';
-  for (let dy = -r - 3; dy <= r + 3; dy++) {
-    const w = Math.round(Math.sqrt(Math.max(0, (r + 3) * (r + 3) - dy * dy)));
-    ctx.fillRect(Math.round(cx - w), Math.round(cy + dy), w * 2, 1);
-  }
-  ring(r + 2, '#a8741f');
-  ring(r + 1, '#e8b33a');
-  ring(r - 6, '#6c3f26');
-  ring(r - 16, '#3a3350');
-  for (let i = 0; i < 28; i++) {
+  const base = art.disc(r);
+  ui.img(base, Math.round(cx) - (r + 3), Math.round(cy) - (r + 3));
+  for (let i = 0; i < 28; i += 2) {
     const a = (i / 28) * Math.PI * 2 + spin * 0.4;
-    ui.rect(cx + Math.cos(a) * (r - 3), cy + Math.sin(a) * (r - 3), i % 4 === 0 ? 2 : 1, i % 4 === 0 ? 2 : 1, i % 4 === 0 ? '#e8b33a' : '#a8741f');
+    const big = i % 4 === 0;
+    ui.rect(cx + Math.cos(a) * (r - 3), cy + Math.sin(a) * (r - 3), big ? 2 : 1, big ? 2 : 1, big ? '#e8b33a' : '#a8741f');
   }
   for (let i = 0; i < 7; i++) {
     const a = (i / 7) * Math.PI * 2 - spin * 0.25 - Math.PI / 2;
@@ -272,8 +273,29 @@ function drawDisc(cx, cy, r, spin, lit, busy) {
   }
 }
 
+function drawDipper(cx, cy, size, stars) {
+  const pts = dipperPoints(cx, cy, size);
+  pts.forEach((q, i) => {
+    if (!i) return;
+    const a = pts[i - 1];
+    const lit = i < stars;
+    const n = Math.max(Math.abs(q[0] - a[0]), Math.abs(q[1] - a[1]));
+    for (let k = 0; k <= n; k += lit ? 2 : 4) ui.rect(a[0] + ((q[0] - a[0]) * k) / n, a[1] + ((q[1] - a[1]) * k) / n, 1, 1, lit ? '#a8741f' : '#3a3350');
+  });
+  pts.forEach((q, i) => {
+    if (i < stars) {
+      const tw = Math.sin(game.t * 3 + i * 1.7) > 0.6;
+      ui.rect(q[0] - 1, q[1] - 1, 3, 3, '#f7dd7a');
+      ui.rect(q[0] - 2, q[1], 5, 1, tw ? '#ffffff' : '#e8b33a');
+      ui.rect(q[0], q[1] - 2, 1, 5, tw ? '#ffffff' : '#e8b33a');
+    } else {
+      ui.rect(q[0], q[1], 2, 2, '#6f6786');
+    }
+  });
+}
+
 game.register('title', Title);
 game.register('intro', Intro);
 game.register('reveal', Reveal);
 
-module.exports = { drawDisc, reasonText, css, C };
+module.exports = { drawDisc, drawDipper, reasonText, css, C };

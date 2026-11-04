@@ -14,12 +14,13 @@ const EL_FX = {
 };
 
 class Particles {
-  constructor() {
+  constructor(max) {
     this.list = [];
+    this.max = max || 300;
   }
   add(p) {
     this.list.push(p);
-    if (this.list.length > 300) this.list.shift();
+    if (this.list.length > this.max) this.list.shift();
   }
   burst(x, y, kind, n, speed) {
     const cols = EL_FX[kind] || EL_FX.none;

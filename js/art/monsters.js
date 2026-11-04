@@ -3,7 +3,7 @@ const { Grid } = require('../core/paint.js');
 const { C, lit, drk } = require('../core/palette.js');
 const { peiBoss } = require('./heroes.js');
 
-const done = (g, hi, lo) => g.rim(hi, lo).outline();
+const done = (g) => g.volume().outlineTint(0.84);
 function eye(g, x, y, c, s) {
   s = s || 2;
   g.rect(x, y, s, s, c || C.gold2);
@@ -134,7 +134,7 @@ const DRAW = {
     g.set(15, 29, C.white);
     g.set(26, 29, C.white);
     g.rect(19, 36, 5, 2, C.ink);
-    return g.outline(C.red2);
+    return g.volume({ keep: new Set([C.ink, C.white]), hi: 0.3, lo: 0.2 }).outlineTint(0.8, C.red2);
   },
   // ---- Centre: late summer ----
   clay(p) {
@@ -190,23 +190,33 @@ const DRAW = {
     return done(g);
   },
   ram(p) {
-    const g = new Grid(54, 48);
+    const g = new Grid(56, 50);
     const a = p.a || C.ink4, b = p.b || C.ink3, c = p.c || C.ochre3;
-    g.rect(10, 34, 6, 12, b);
-    g.rect(32, 34, 6, 12, b);
-    g.rect(18, 36, 5, 10, drk(b, 0.2));
-    g.rect(26, 36, 5, 10, drk(b, 0.2));
-    g.poly([[4, 22], [12, 12], [30, 10], [42, 18], [40, 38], [8, 38]], a);
-    g.poly([[12, 14], [24, 12], [22, 22], [12, 24]], lit(a, 0.25));
-    g.poly([[26, 20], [36, 22], [34, 30], [24, 32]], lit(a, 0.15));
-    g.ell(42, 18, 9, 9, a);
-    g.poly([[46, 18], [54, 22], [46, 26]], c);
-    g.curve(38, 12, 30, 2, 38, 2, c, 5, 3);
-    g.curve(38, 2, 44, 2, 44, 8, c, 3, 2);
-    g.rect(43, 15, 3, 3, C.gold2);
-    g.set(45, 16, C.ink);
-    g.line(14, 30, 22, 26, drk(a, 0.3));
-    return done(g, 0.2, 0.3);
+    // Far legs, then the woolly body over them.
+    g.line(14, 34, 12, 46, drk(b, 0.3), 4);
+    g.line(33, 34, 35, 46, drk(b, 0.3), 4);
+    g.ell(23, 26, 19, 13, a);
+    g.ell(14, 24, 8, 8, lit(a, 0.14));
+    g.ell(28, 21, 9, 8, lit(a, 0.14));
+    g.ell(20, 32, 8, 6, lit(a, 0.07));
+    g.line(8, 34, 6, 46, b, 5);
+    g.line(28, 35, 28, 46, b, 5);
+    g.rect(3, 45, 7, 3, C.ink2);
+    g.rect(25, 45, 7, 3, C.ink2);
+    g.rect(10, 45, 5, 3, C.ink2);
+    g.rect(33, 45, 5, 3, C.ink2);
+    // Neck and head, carried low to charge.
+    g.poly([[34, 16], [44, 14], [50, 24], [40, 32], [32, 28]], a);
+    g.ell(44, 20, 8, 8, lit(a, 0.08));
+    g.poly([[46, 18], [55, 24], [47, 29]], c);
+    g.set(53, 24, C.ink);
+    // Curled horn
+    g.curve(40, 13, 28, 2, 37, 1, c, 5, 3);
+    g.curve(37, 1, 44, 1, 43, 8, c, 3, 2);
+    g.line(33, 7, 36, 10, drk(c, 0.4));
+    g.rect(44, 17, 3, 3, C.gold2);
+    g.set(46, 18, C.ink);
+    return done(g);
   },
   // ---- West: autumn ----
   scorpion(p) {
@@ -245,7 +255,7 @@ const DRAW = {
     g.set(22, 59, C.red);
     g.rect(13, 23, 3, 3, C.red3);
     g.rect(29, 23, 3, 3, C.red3);
-    return g.outline();
+    return g.volume().outlineTint(0.84);
   },
   cicada(p) {
     const g = new Grid(52, 42);
@@ -337,7 +347,7 @@ const DRAW = {
     g.rect(21, 8, 3, 2, C.white);
     g.rect(27, 8, 3, 2, C.white);
     g.line(25, 2, 25, 0, b);
-    return g.outline(C.violet2);
+    return g.volume({ cap: 4, keep: new Set([C.white, C.gold, C.blue3]) }).outlineTint(0.75, C.violet2);
   },
   shade(p) {
     const g = new Grid(50, 58);
@@ -353,7 +363,7 @@ const DRAW = {
     g.ell(25, 33, 3, 4, C.ink);
     g.set(11, 40, c);
     g.set(38, 38, c);
-    return g.outline(C.ink);
+    return g.volume({ keep: new Set([C.ink, C.gold2]), hi: 0.34, lo: 0.3 }).outlineTint(0.85);
   },
   // ---- Bosses ----
   vineMother() {
@@ -446,38 +456,62 @@ const DRAW = {
     return done(g, 0.18, 0.28);
   },
   tiger() {
-    const g = new Grid(136, 104);
-    const a = 0xe6e8ee, b = 0xb8bdcc, s = 0x2d2a44, e = C.ice2;
-    g.curve(14, 44, -2, 24, 12, 8, a, 10, 5);
-    g.poly([[6, 4], [14, 0], [20, 10], [8, 12]], s);
-    g.poly([[12, 38], [28, 24], [84, 22], [100, 40], [96, 72], [18, 72]], a);
-    for (let i = 0; i < 6; i++) g.poly([[26 + i * 12, 24], [33 + i * 12, 24], [28 + i * 12, 46]], s);
-    g.poly([[20, 66], [90, 66], [86, 76], [24, 76]], b);
-    [[18, 66], [40, 68], [68, 68], [88, 66]].forEach((q, i) => {
-      g.rect(q[0], q[1], 13, 28, i % 2 ? b : a);
-      g.rect(q[0] - 1, q[1] + 26, 16, 7, b);
-      for (let k = 0; k < 3; k++) g.set(q[0] + 2 + k * 4, q[1] + 32, C.ink);
+    const g = new Grid(136, 108);
+    const a = 0xe6e8ee, b = 0xb4bacb, s = 0x2d2a44, e = C.ice2;
+    // Tail lashes up behind the haunches.
+    g.curve(16, 50, -4, 34, 10, 12, a, 11, 5);
+    g.curve(10, 12, 15, 5, 22, 8, s, 6, 3);
+    // Far legs
+    g.curve(30, 72, 24, 84, 30, 100, b, 13, 9);
+    g.curve(86, 72, 92, 86, 88, 100, b, 13, 9);
+    g.rect(24, 98, 14, 6, 0x9aa0b4);
+    g.rect(82, 98, 14, 6, 0x9aa0b4);
+    // Body: haunch, sagging belly, huge shoulder
+    g.ell(32, 54, 24, 23, a);
+    g.ell(66, 58, 28, 19, a);
+    g.ell(90, 50, 22, 24, a);
+    g.poly([[32, 74], [92, 72], [80, 80], [44, 80]], b);
+    // Near legs, with bent haunch and planted paws
+    g.curve(26, 66, 40, 84, 22, 100, a, 18, 11);
+    g.curve(92, 64, 104, 82, 100, 100, a, 16, 12);
+    g.ell(22, 102, 10, 5, a);
+    g.ell(101, 102, 11, 5, a);
+    for (let k = 0; k < 3; k++) {
+      g.rect(14 + k * 6, 103, 2, 3, C.ink);
+      g.rect(93 + k * 6, 103, 2, 3, C.ink);
+    }
+    // Stripes follow the curve of the body instead of hanging straight.
+    [[22, 34, 30, 54], [34, 31, 40, 54], [48, 37, 52, 58], [60, 38, 62, 60], [72, 36, 72, 58], [84, 30, 82, 52], [18, 60, 28, 66], [32, 70, 26, 84], [100, 62, 92, 72]].forEach((q, i) => {
+      g.curve(q[0], q[1], (q[0] + q[2]) / 2 + 3, (q[1] + q[3]) / 2, q[2], q[3], s, i < 6 ? 5 : 4, 1);
     });
-    g.ell(104, 40, 26, 24, a);
-    g.ell(116, 50, 15, 12, 0xf6f7fb);
-    g.poly([[84, 22], [84, 6], [98, 16]], a);
-    g.poly([[118, 16], [128, 4], [130, 22]], a);
-    g.poly([[86, 17], [86, 10], [93, 15]], C.peach);
-    g.rect(96, 26, 4, 12, s);
-    g.rect(104, 24, 4, 10, s);
-    g.rect(112, 26, 4, 10, s);
-    g.poly([[92, 38], [103, 42], [103, 46], [92, 44]], C.gold2);
-    g.poly([[123, 38], [112, 42], [112, 46], [123, 44]], C.gold2);
-    g.rect(98, 42, 3, 4, C.ink);
-    g.rect(114, 42, 3, 4, C.ink);
-    g.line(90, 36, 103, 41, s, 2);
-    g.line(125, 36, 112, 41, s, 2);
-    g.ell(116, 48, 4, 3, C.peach3);
-    g.poly([[100, 56], [132, 56], [124, 66], [108, 66]], C.red2);
-    g.poly([[104, 56], [109, 56], [106, 67]], C.paper);
-    g.poly([[122, 56], [127, 56], [124, 67]], C.paper);
-    [[36, 8], [60, 0], [84, 2]].forEach((q) => g.poly([[q[0], q[1]], [q[0] + 5, q[1] + 4], [q[0] + 3, q[1] + 22], [q[0] - 2, q[1] + 20]], e));
-    return done(g, 0.1, 0.22);
+    // Head, low and forward
+    g.ell(108, 44, 25, 23, a);
+    g.ell(119, 54, 15, 12, 0xf6f7fb);
+    g.poly([[88, 26], [88, 9], [103, 20]], a);
+    g.poly([[122, 22], [132, 9], [133, 28]], a);
+    g.poly([[90, 21], [90, 14], [98, 20]], C.peach);
+    g.poly([[124, 22], [130, 15], [131, 25]], C.peach);
+    // The king mark on the brow
+    g.rect(99, 25, 22, 3, s);
+    g.rect(101, 30, 18, 3, s);
+    g.rect(99, 35, 22, 3, s);
+    g.rect(108, 25, 4, 13, s);
+    g.line(90, 44, 94, 50, s, 2);
+    g.line(132, 46, 128, 52, s, 2);
+    g.poly([[94, 40], [106, 44], [106, 49], [95, 46]], C.gold2);
+    g.poly([[129, 40], [117, 44], [117, 49], [128, 46]], C.gold2);
+    g.rect(101, 44, 3, 4, C.ink);
+    g.rect(118, 44, 3, 4, C.ink);
+    g.line(92, 38, 106, 43, s, 2);
+    g.line(131, 38, 117, 43, s, 2);
+    g.ell(112, 52, 4, 3, C.peach3);
+    g.line(112, 55, 112, 58, s);
+    g.poly([[100, 60], [128, 59], [122, 70], [106, 70]], C.red2);
+    g.poly([[103, 60], [108, 60], [105, 71]], C.paper);
+    g.poly([[120, 60], [125, 60], [122, 71]], C.paper);
+    // Autumn's blades float along its spine.
+    [[34, 8], [58, 2], [82, 0]].forEach((q) => g.poly([[q[0], q[1]], [q[0] + 5, q[1] + 4], [q[0] + 3, q[1] + 22], [q[0] - 2, q[1] + 20]], e));
+    return g.volume({ cap: 9, keep: new Set([C.ink, C.ink2, C.white, C.gold2, s]), hi: 0.1, lo: 0.34 }).outlineTint(0.85);
   },
   frostDragon() {
     const g = new Grid(128, 128);

@@ -9,6 +9,12 @@ const E = require('../systems/economy.js');
 const G = require('../data/game.js');
 const P = require('../systems/party.js');
 const O = require('./overlays.js');
+const nav = require('./nav.js');
+const Idle = require('../systems/idle.js');
+const Daily = require('../systems/daily.js');
+const Boosts = require('../systems/boosts.js');
+const clock = require('../core/clock.js');
+const atlas = require('../core/atlas.js');
 const { Particles } = require('../core/fx.js');
 const { Grid } = require('../core/paint.js');
 const { C, UI } = require('../core/palette.js');
@@ -28,15 +34,24 @@ class Party {
     this.scroll = 0;
     this.maxScroll = 0;
     this.fx = new Particles();
+    this.bottom = H - nav.height();
   }
   back() {
-    game.go(this.p.from === 'map' ? 'map' : 'hub');
+    game.go('map');
+  }
+  enter() {
+    audio.bgm('road');
   }
   update(dt) {
     this.fx.update(dt);
   }
   onDrag(dx, dy) {
     this.scroll = Math.max(0, Math.min(this.maxScroll, this.scroll - dy));
+  }
+  afterTraining(s) {
+    Daily.mark(s, 'train', Idle.dayOf(clock.now()));
+    Idle.nudge(s);
+    store.persist();
   }
   draw() {
     const s = store.get();
@@ -58,49 +73,57 @@ class Party {
       ui.button('tab-' + id, x, top, tw, 26, { label: G.HEROES[id].name, kind: this.hero === id ? 'primary' : 'normal', onTap: () => { this.hero = id; this.scroll = 0; } });
     });
     const listTop = top + 30;
-    ui.setClip(0, listTop, W, H - listTop);
+    ui.setClip(0, listTop, W, this.bottom - listTop);
     let y = listTop - Math.round(this.scroll);
-    // Card
-    ui.panel(m, y, w, 76);
-    ui.rect(m + 8, y + 8, 60, 60, '#2a2542');
-    ui.img(art.portrait(this.hero), m + 14, y + 14);
-    const tx = m + 76;
+    // Card: the hero as they walk the road, with their numbers.
+    ui.panel(m, y, w, 80);
+    ui.rect(m + 6, y + 6, 58, 68, '#2a2542');
+    const a = art.hero(this.hero, Math.floor(game.t * 1.6) % 2 ? 'idle1' : 'idle0', h.outfit);
+    ui.img(a, m + 35 - a.w / 2, y + 74 - a.h);
+    const tx = m + 72;
     ui.text(`${def.name}`, tx, y + 8, UI.text);
     ui.text(`Lv ${h.lv}`, tx + 30, y + 8, UI.gold);
     ui.text(G.ELEMENTS[def.el].name, W - m - 10, y + 8, G.ELEMENTS[def.el].css, { align: 'r' });
-    ui.text(def.title, tx, y + 23, UI.dim);
+    ui.text(def.title, tx, y + 22, UI.dim);
     const need = G.xpNeed(h.lv);
-    ui.bar(tx, y + 39, W - m - 10 - tx, 5, h.lv >= G.MAX_LEVEL ? 1 : h.xp / need, '#7fd1a4');
-    ui.text(`气血 ${st.hp}  灵力 ${st.mp}`, tx, y + 47, UI.text);
+    ui.bar(tx, y + 37, W - m - 10 - tx, 5, h.lv >= G.MAX_LEVEL ? 1 : h.xp / need, '#7fd1a4');
+    ui.text(`气血 ${ui.num(st.hp)}  灵力 ${st.mp}`, tx, y + 46, UI.text);
     ui.text(`攻 ${st.atk}  防 ${st.def}  速 ${Math.round(st.spd)}`, tx, y + 60, UI.dim);
-    y += 80;
+    y += 84;
     // Training
-    ui.panel(m, y, w, 28 * 4 + 24);
+    ui.panel(m, y, w, 30 * 4 + 56);
     ui.text('修炼', m + 10, y + 7, UI.gold);
-    ui.text('消耗星砂,永久提升', W - m - 10, y + 7, UI.dim, { align: 'r' });
-    let ry = y + 22;
+    ui.text(`全队战力 ${ui.num(P.power(s))}`, W - m - 10, y + 7, UI.dim, { align: 'r' });
+    let ry = y + 23;
     Object.keys(G.TRAIN).forEach((k) => {
       const t = G.TRAIN[k];
       const lv = h.train[k];
       const max = lv >= G.TRAIN_MAX;
       const cost = G.trainCost(lv);
-      ui.img(art.icon(t.icon), m + 8, ry + 5);
+      ui.img(art.icon(t.icon), m + 8, ry + 6);
       ui.text(t.name, m + 28, ry + 2, UI.text);
-      ui.text(`+${Math.round(lv * t.pct * 100)}%`, m + 58, ry + 2, UI.jade);
-      for (let i = 0; i < G.TRAIN_MAX; i++) {
-        ui.rect(m + 28 + i * 7, ry + 17, 6, 4, i < lv ? '#e8b33a' : '#332d4a');
-      }
-      ui.button(`train-${k}`, W - m - 80, ry + 1, 72, 25, {
-        label: max ? '圆满' : ui.fmt(cost), icon: max ? undefined : 'dust', kind: !max && s.stardust >= cost ? 'primary' : 'normal',
-        disabled: max || s.stardust < cost, sound: 'level',
+      ui.text(`${lv} 层 +${Math.round(lv * t.pct * 100)}%`, m + 58, ry + 2, UI.jade);
+      ui.bar(m + 28, ry + 17, W - m * 2 - 112, 5, lv / G.TRAIN_MAX, '#e8b33a');
+      ui.button(`train-${k}`, W - m - 80, ry + 1, 72, 26, {
+        label: max ? '圆满' : ui.num(cost), icon: max ? undefined : 'coin', kind: !max && s.coin >= cost ? 'primary' : 'normal',
+        disabled: max || s.coin < cost, sound: 'level',
         onTap: () => {
           E.train(s, this.hero, k);
-          store.persist();
+          this.afterTraining(s);
         },
       });
-      ry += 28;
+      ry += 30;
     });
-    y += 28 * 4 + 28;
+    ui.button('train-auto', m + 8, ry + 2, w - 16, 26, {
+      label: '一键修炼(全队)', kind: 'jade', sound: 'level',
+      onTap: () => {
+        const r = E.autoTrain(s);
+        if (!r.n) return ui.toast('铜钱不够了,回路上攒一攒', 1.2);
+        this.afterTraining(s);
+        return ui.toast(`全队修炼了 ${r.n} 层`, 1.2);
+      },
+    });
+    y += 30 * 4 + 60;
     // Relics
     ui.panel(m, y, w, 62);
     ui.text('法宝', m + 10, y + 7, UI.gold);
@@ -112,8 +135,8 @@ class Party {
       if (item) {
         const rd = G.RELICS[item.type];
         ui.button(`relic-${slot}`, x, y + 23, sw, 32, { label: '', onTap: () => game.push('relicpick', { hero: this.hero, slot }) });
-        ui.img(relicIcon(item), x + 5, y + 31);
-        ui.text(rd.name, x + 24, y + 33, G.RANKS[item.rank].css);
+        ui.img(relicIcon(item), x + 5, y + 30);
+        ui.text(rd.name, x + 24, y + 32, G.RANKS[item.rank].css);
       } else {
         ui.button(`relic-${slot}`, x, y + 23, sw, 32, { label: s.relics.length ? '+ 佩戴' : '空', kind: 'ghost', onTap: () => game.push('relicpick', { hero: this.hero, slot }) });
       }
@@ -121,26 +144,26 @@ class Party {
     y += 66;
     // Skills
     const allSkills = def.skills;
-    const rows = Math.ceil(allSkills.length / 2);
-    const sh = 34 + rows * 30;
+    const sh = 28 + allSkills.length * 28;
     ui.panel(m, y, w, sh);
     ui.text('术法', m + 10, y + 7, UI.gold);
-    const cw = Math.floor((w - 20) / 2);
     allSkills.forEach(([id, need2], i) => {
       const sk = G.SKILLS[id];
-      const x = m + 10 + (i % 2) * cw;
-      const yy = y + 24 + Math.floor(i / 2) * 30;
+      const x = m + 10;
+      const yy = y + 23 + i * 28;
       const known = h.lv >= need2;
       ui.text(sk.name, x, yy, known ? (sk.el ? G.ELEMENTS[sk.el].css : UI.jade) : UI.faint);
-      ui.text(known ? `灵力 ${sk.mp}` : `Lv ${need2}`, x + cw - 8, yy, UI.dim, { align: 'r' });
+      ui.text(known ? `灵力 ${sk.mp}` : `Lv ${need2}`, W - m - 10, yy, UI.dim, { align: 'r' });
       ui.text(sk.desc, x, yy + 13, known ? UI.dim : UI.faint);
     });
     y += sh + 8;
-    this.maxScroll = Math.max(0, y + this.scroll - (H - D.safeBottom));
+    this.maxScroll = Math.max(0, y + this.scroll - this.bottom);
+    this.scroll = Math.min(this.scroll, this.maxScroll);
     ui.endClip();
     ui.rect(0, 0, W, top - 1, '#14121f');
-    ui.header('队伍', () => this.back(), s.stardust);
+    ui.header('队伍', this.p.from === 'map' ? () => this.back() : null, s.stardust, s.coin);
     this.fx.draw();
+    nav.draw('party');
   }
 }
 
@@ -183,6 +206,16 @@ class RelicPick {
       ui.text(def.name, x + 34, ry + 5, G.RANKS[item.rank].css);
       ui.text(G.RANKS[item.rank].name, x + 36 + ui.font.width(def.name), ry + 5, UI.dim);
       if (owner) ui.text(G.HEROES[owner].name, x + w - 14, ry + 5, UI.jade, { align: 'r' });
+      else {
+        ui.button('melt-' + item.uid, x + w - 48, ry + 6, 36, 24, {
+          label: '熔', kind: 'ghost', sound: 'coin',
+          onTap: () => {
+            const v = E.meltRelic(s, item.uid);
+            store.persist();
+            ui.toast(`熔成了 ${ui.num(v)} 铜钱`, 1);
+          },
+        });
+      }
       ui.text(G.relicDesc(item.type, item.rank), x + 34, ry + 20, UI.dim);
       ry += rh;
     });
@@ -221,7 +254,7 @@ function furnaceSprite() {
     const a = (i / 7) * 6.28;
     g.set(36 + Math.cos(a) * 19, 37 + Math.sin(a) * 11, C.gold);
   }
-  furnaceArt = g.rim(0.2, 0.3).outline().toCanvas();
+  furnaceArt = atlas.add(g.volume({ cap: 7, hi: 0.22, lo: 0.32 }).outlineTint(0.85));
   return furnaceArt;
 }
 
@@ -237,7 +270,7 @@ class Furnace {
     this.runner = new game.Runner();
   }
   enter() {
-    audio.bgm('title');
+    audio.bgm('road');
   }
   update(dt) {
     this.runner.update(dt);
@@ -264,35 +297,67 @@ class Furnace {
   }
   doRefine() {
     const s = store.get();
-    const self = this;
-    const aId = this.a, bId = this.b;
-    this.runner.run((function* run() {
-      self.heat = 1.4;
-      self.busy = true;
-      audio.sfx('furnace');
-      audio.buzz('medium');
-      yield 1.3;
-      const item = E.refine(s, aId, bId);
-      self.busy = false;
-      self.a = null;
-      self.b = null;
-      if (!item) return;
-      store.persist();
-      audio.sfx('star');
-      self.fx.burst(W / 2, self.fy + 20, 'star', 60, 130);
-      const def = G.RELICS[item.type];
-      O.modal({
-        title: `炼成 ${G.RANKS[item.rank].name}品法宝`, titleColor: G.RANKS[item.rank].css, icon: relicIcon(item),
-        text: `${def.name}:${G.relicDesc(item.type, item.rank)}`,
-        buttons: [{ label: '收入行囊', kind: 'primary' }, { label: '去佩戴', kind: 'jade', onTap: () => game.go('party') }],
+    const now = clock.now();
+    const job = E.startRefine(s, this.a, this.b, now);
+    if (!job) return;
+    this.a = null;
+    this.b = null;
+    this.heat = 1.4;
+    store.persist();
+    audio.sfx('furnace');
+    audio.buzz('medium');
+  }
+  // Takes out everything that has finished, and shows off the first new thing.
+  collect() {
+    const s = store.get();
+    const done = E.collectRefined(s, clock.now());
+    if (!done.length) return;
+    store.persist();
+    audio.sfx('star');
+    this.fx.burst(W / 2, this.fy + 20, 'star', 60, 130);
+    const item = done[0];
+    const def = G.RELICS[item.type];
+    O.modal({
+      title: `炼成 ${G.RANKS[item.rank].name}品法宝${done.length > 1 ? ` 等 ${done.length} 件` : ''}`, titleColor: G.RANKS[item.rank].css, icon: relicIcon(item),
+      text: `${def.name}:${G.relicDesc(item.type, item.rank)}`,
+      buttons: [{ label: '收入行囊', kind: 'primary' }, { label: '去佩戴', kind: 'jade', onTap: () => game.go('party') }],
+    });
+  }
+  drawJobs(s, y) {
+    const now = clock.now();
+    const m = 8, w = W - m * 2;
+    ui.panel(m, y, w, 34);
+    const jobs = s.furnace.jobs;
+    if (!jobs.length) {
+      ui.text(`炉中空闲 · 可同时炼 ${E.FURNACE_SLOTS} 件 · 人不在也会炼`, W / 2, y + 11, UI.dim, { align: 'c' });
+      return y + 38;
+    }
+    const ready = jobs.filter((j) => j.doneAt <= now).length;
+    const next = jobs.filter((j) => j.doneAt > now).sort((a, b) => a.doneAt - b.doneAt)[0];
+    if (next) {
+      const left = next.doneAt - now;
+      const total = G.RANKS[next.rank].mins * 60000;
+      ui.text(`还要 ${ui.dur(left / 1000)}`, m + 10, y + 6, UI.text);
+      ui.bar(m + 10, y + 21, w - 100, 5, 1 - left / total, '#ec7a4e');
+      const cost = Boosts.rushCost(left);
+      ui.button('furnace-rush', W - m - 76, y + 5, 70, 24, {
+        icon: 'dust', label: ui.num(cost), kind: s.stardust >= cost ? 'jade' : 'normal', disabled: s.stardust < cost || !!ready, sound: 'star',
+        onTap: () => {
+          if (!E.spendDust(s, cost)) return;
+          next.doneAt = now;
+          store.persist();
+        },
       });
-    })());
+    }
+    if (ready) {
+      ui.button('furnace-open', next ? m + 6 : m + 8, next ? y + 4 : y + 5, next ? w - 94 : w - 16, 26, { label: `开炉取宝 ${ready} 件`, kind: 'primary', sound: null, onTap: () => this.collect() });
+    }
+    return y + 38;
   }
   drawRefine(s, y) {
     const m = 8, w = W - m * 2;
     this.fy = y + 2;
-    const fCv = furnaceSprite();
-    ui.img(fCv, W / 2 - 36, y);
+    ui.img(furnaceSprite(), W / 2 - 36, y);
     this.fx.draw();
     const slot = (x, id) => {
       ui.panel(x, y + 16, 66, 34, { fill: '#2a2542' });
@@ -304,7 +369,8 @@ class Furnace {
     };
     slot(m, this.a);
     slot(W - m - 66, this.b);
-    y += 68;
+    y += 66;
+    y = this.drawJobs(s, y);
     let previewH = 0;
     if (this.a && this.b) {
       const pv = E.previewRefine(this.a, this.b);
@@ -313,10 +379,10 @@ class Furnace {
       ui.panel(m, y, w, previewH);
       ui.img(art.relic(pv.def.shape, pv.def.el, pv.rank), m + 10, y + 11);
       ui.text(known ? pv.def.name : `未知的${pv.family}法宝`, m + 32, y + 8, G.RANKS[pv.rank].css);
-      ui.text(`${G.RANKS[pv.rank].name}品 · ${pv.family}`, m + 32, y + 23, UI.dim);
+      ui.text(`${G.RANKS[pv.rank].name}品 · ${pv.family} · ${ui.dur(pv.mins * 60)}`, m + 32, y + 23, UI.dim);
       ui.text(known ? G.relicDesc(pv.type, pv.rank) : '炼成之后才知道功效', m + 10, y + 42, UI.text);
-      const can = s.stardust >= pv.cost && !this.busy;
-      ui.button('furnace-go', W - m - 82, y + 7, 74, 30, { icon: 'dust', label: ui.fmt(pv.cost), kind: can ? 'primary' : 'normal', disabled: !can, sound: null, onTap: () => this.doRefine() });
+      const can = s.coin >= pv.cost && s.furnace.jobs.length < E.FURNACE_SLOTS;
+      ui.button('furnace-go', W - m - 82, y + 7, 74, 30, { icon: 'coin', label: ui.num(pv.cost), kind: can ? 'primary' : 'normal', disabled: !can, sound: null, onTap: () => this.doRefine() });
       y += previewH + 4;
     } else {
       ui.text('选两只妖灵,同气、相生、相克各有所长', W / 2, y + 2, UI.dim, { align: 'c' });
@@ -327,7 +393,7 @@ class Furnace {
     let ry = y - Math.round(this.scroll);
     if (!keys.length) {
       ui.panel(m, ry, w, 74);
-      ui.para('还没有妖灵。战斗中敌人血量越低,封灵符越容易成功。封灵符可以在驿铺买到。', m + 12, ry + 10, w - 24, UI.dim);
+      ui.para('还没有妖灵。队伍赶路时偶尔会收到。亲自打时,敌人血量越低,封灵符越容易成功。', m + 12, ry + 10, w - 24, UI.dim);
       ry += 78;
     }
     const cw = Math.floor((w - 4) / 2);
@@ -382,7 +448,7 @@ class Furnace {
     if (this.tab === 'refine') this.drawRefine(s, y);
     else this.drawCodex(s, y);
     ui.rect(0, 0, W, top - 1, '#14121f');
-    ui.header('星炉', () => game.go('hub'), s.stardust);
+    ui.header('星炉', () => game.go('station'), s.stardust, s.coin);
   }
 }
 

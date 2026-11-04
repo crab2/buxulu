@@ -42,12 +42,17 @@ const capTop = cap && cap.height ? Math.round(toLogical(cap.top)) : safeTop + 4;
 const capBottom = cap && cap.height ? Math.round(toLogical(cap.bottom)) : safeTop + 24;
 const capLeft = cap && cap.height ? Math.round(toLogical(cap.left)) : W - 70;
 
+// Thirty frames a second is plenty for this art and much kinder to a phone left running on a desk.
+function setFps(fps) {
+  if (wx.setPreferredFramesPerSecond) wx.setPreferredFramesPerSecond(fps);
+}
+
 function present() {
   mainCtx.imageSmoothingEnabled = false;
   mainCtx.drawImage(back, 0, 0, W * scale, H * scale);
 }
 
 module.exports = {
-  W, H, scale, ctx, back, present, safeTop, safeBottom, capTop, capBottom, capLeft, contentTop: capBottom + 4,
+  W, H, scale, ctx, back, present, setFps, safeTop, safeBottom, capTop, capBottom, capLeft, contentTop: capBottom + 4,
   touchX: (css) => toLogical(css), touchY: (css) => toLogical(css),
 };
