@@ -1,27 +1,51 @@
 // Everything that changes the save file: rewards, purchases, training, refining, equipping.
 // Pure functions over a plain object, so the balance simulation can use them without a phone.
+//
+// The one rule that shapes all of it: coins and experience, which come from time on the road, pay for
+// all progress. Stardust, which comes mostly from walking, only buys enhancements (systems/boosts.js).
+// Nothing a player needs in order to finish the story costs Stardust or looks at real steps.
 const D = require('../data/game.js');
+const W = require('../data/world.js');
 const { NODE_INDEX, CHAPTERS } = require('../data/chapters.js');
 
 function defaultSave() {
-  const hero = (joined) => ({ lv: 1, xp: 0, joined, train: { hp: 0, atk: 0, def: 0, spd: 0 }, relics: [null, null] });
+  const hero = (joined) => ({ lv: 1, xp: 0, joined, train: { hp: 0, atk: 0, def: 0, spd: 0 }, relics: [null, null], outfit: null });
   return {
-    v: 1, seq: 0,
+    v: 2, seq: 0,
+    coin: 0,
     stardust: 0,
     items: { pill: 3, ether: 1, incense: 0, seal: 3 },
+    herbs: { wood: 0, fire: 0, earth: 0, metal: 0, water: 0 },
     spirits: {},
     relics: [], relicSeq: 0,
     heroes: { cen: hero(true), ruo: hero(false), zhuo: hero(false) },
-    progress: { chapter: 0, cleared: {}, stars: 0, ending: null, lit: {} },
+    progress: { chapter: 0, cleared: {}, stars: 0, ending: null, lap: 0, lapAt: 0 },
     codex: { recipes: {}, monsters: {} },
     steps: { applied: [], total: 0, welcomed: false, lastView: null },
-    flags: { intro: false, seen: {}, tips: {}, stipendDay: 0 },
-    settings: { bgm: true, sfx: true, vibrate: true, auto: false, speed: 1 },
+    flags: { intro: false, seen: {}, tips: {}, stipendDay: 0, replayDay: 0, replays: 0 },
+    settings: { bgm: true, sfx: true, vibrate: true, auto: false, speed: 1, smooth: false, keepOn: false },
+    idle: {
+      last: 0, secs: 0, total: 0, li: 0, toNext: 0, target: null, wait: 0, blocked: null,
+      hasteSecs: 0, meal: null, mealSecs: 0, dashLi: 0,
+      pack: { coin: 0, xp: 0, dust: 0, items: {}, spirits: {}, herbs: {} },
+      carry: { spirit: 0, item: 0, herb: 0 },
+      log: [],
+    },
+    dispatch: { active: [], board: [], nextJob: 0, seq: 0, done: 0, rank: {} },
+    garden: { plots: [], water: 0 },
+    furnace: { jobs: [] },
+    tower: { best: 0, tries: 0 },
+    wander: { pos: 0, laps: 0, rolls: 3, regen: 0, bonus: false, stepCarry: 0 },
+    daily: { day: 0, done: {}, claimed: {}, bonus: false, walk: false },
+    blessings: { pack: 0, stride: 0, fortune: 0 },
+    wardrobe: { owned: {}, pet: null, decor: {} },
+    letters: { got: [], unread: 0 },
   };
 }
 
 // Fills in anything added by a newer version without disturbing existing progress.
 function upgrade(save) {
+  const fromV1 = (save.v || 1) < 2;
   const base = defaultSave();
   const merge = (a, b) => {
     Object.keys(b).forEach((k) => {
@@ -30,6 +54,15 @@ function upgrade(save) {
     });
   };
   merge(save, base);
+  if (fromV1) {
+    // Training tiers became half as strong and twice as many, so old tiers double to keep their value.
+    Object.keys(save.heroes).forEach((id) => {
+      const t = save.heroes[id].train;
+      Object.keys(t).forEach((k) => { t[k] = Math.min(D.TRAIN_MAX, t[k] * 2); });
+    });
+    // Saves from the turn-based version start the road where they had got to, with their Stardust intact.
+    save.v = 2;
+  }
   return save;
 }
 
@@ -37,19 +70,37 @@ function addDust(s, n) {
   s.stardust = Math.max(0, s.stardust + n);
 }
 
+function addCoin(s, n) {
+  s.coin = Math.max(0, s.coin + n);
+}
+
 function addItems(s, items) {
   Object.keys(items || {}).forEach((k) => { s.items[k] = (s.items[k] || 0) + items[k]; });
+}
+
+function addHerbs(s, herbs) {
+  Object.keys(herbs || {}).forEach((k) => { s.herbs[k] = (s.herbs[k] || 0) + herbs[k]; });
 }
 
 function canAfford(s, n) {
   return s.stardust >= n;
 }
 
-function spend(s, n) {
+function spendDust(s, n) {
   if (s.stardust < n) return false;
   s.stardust -= n;
   return true;
 }
+
+function spendCoin(s, n) {
+  if (s.coin < n) return false;
+  s.coin -= n;
+  return true;
+}
+
+// Real steps also carry the party a little further down the road, and earn extra rolls on the board.
+const STEPS_PER_LI = 1000;
+const STEPS_PER_ROLL = 2000;
 
 // Applies server grants exactly once, using ids recorded in the save.
 function applyGrants(s, grants) {
@@ -59,7 +110,16 @@ function applyGrants(s, grants) {
     addDust(s, g.dust || 0);
     addItems(s, g.items);
     s.steps.applied.push(g.id);
-    (g.notes || []).forEach((n) => { if (n.steps && (n.kind === 'today' || n.kind === 'backfill')) s.steps.total += n.steps; });
+    let walked = 0;
+    (g.notes || []).forEach((n) => { if (n.steps && (n.kind === 'today' || n.kind === 'backfill')) walked += n.steps; });
+    s.steps.total += walked;
+    if (walked) {
+      s.idle.dashLi += walked / STEPS_PER_LI;
+      s.wander.stepCarry += walked;
+      const rolls = Math.floor(s.wander.stepCarry / STEPS_PER_ROLL);
+      s.wander.stepCarry -= rolls * STEPS_PER_ROLL;
+      s.wander.rolls += rolls;
+    }
     fresh.push(g);
   });
   if (s.steps.applied.length > 80) s.steps.applied = s.steps.applied.slice(-80);
@@ -80,44 +140,71 @@ function addXp(s, id, xp) {
   return ups;
 }
 
-function enemyXp(lv, m) {
-  const mult = m.boss ? 8 : m.elite ? 3 : 1;
-  return Math.round((7 + 3.2 * lv) * mult);
-}
-
-function enemyDust(lv, m) {
-  const mult = m.boss ? 10 : m.elite ? 4 : 1;
-  return Math.round((1.5 + 0.3 * lv) * mult);
-}
-
-// Battle spoils. Repeat clears give less currency so walking stays the main income, while XP is
-// unaffected so that farming can always rescue a stuck player.
-function battleRewards(s, enemies, nodeId) {
-  const first = nodeId && !s.progress.cleared[nodeId];
-  let xp = 0, dust = 0;
-  enemies.forEach((e) => {
-    xp += enemyXp(e.lv, e.def_);
-    dust += enemyDust(e.lv, e.def_);
-    s.codex.monsters[e.id] = true;
-  });
-  if (!first) dust = Math.round(dust * 0.6);
-  addDust(s, dust);
-  const drops = {};
-  enemies.forEach((e) => {
-    if (e.def_.boss) return;
-    const r = Math.random();
-    if (r < 0.1) drops.pill = (drops.pill || 0) + 1;
-    else if (r < 0.15) drops.ether = (drops.ether || 0) + 1;
-    else if (r < 0.22) drops.seal = (drops.seal || 0) + 1;
-  });
-  addItems(s, drops);
+// Experience goes to everyone who has joined. Returns who levelled up.
+function shareXp(s, xp) {
   const ups = [];
   Object.keys(s.heroes).forEach((id) => {
     if (!s.heroes[id].joined) return;
     const n = addXp(s, id, xp);
     if (n) ups.push({ id, n, lv: s.heroes[id].lv });
   });
-  return { xp, dust, drops, ups };
+  return ups;
+}
+
+function foeWeight(m) {
+  return m.boss ? 6 : m.elite ? 2.5 : 1;
+}
+
+// A hand-played repeat fight is worth about two minutes on the road, up to a daily allowance.
+const REPLAY_LIMIT = 30;
+const FIRST_CLEAR = 7;
+const FIRST_DUST = { fight: 10, elite: 25, boss: 80 };
+
+function nodeRewards(s, enemies, nodeId, day) {
+  const first = !!nodeId && !s.progress.cleared[nodeId];
+  let xp = 0, coin = 0;
+  enemies.forEach((e) => {
+    const w = foeWeight(e.def_) * 2;
+    xp += D.xpPerMin(e.lv) * w;
+    coin += D.coinPerMin(e.lv) * w;
+  });
+  let dust = 0;
+  if (first) {
+    xp *= FIRST_CLEAR;
+    coin *= FIRST_CLEAR;
+    const node = NODE_INDEX[nodeId].node;
+    dust = FIRST_DUST[node.type] || 0;
+  } else if (day !== undefined) {
+    if (s.flags.replayDay !== day) {
+      s.flags.replayDay = day;
+      s.flags.replays = 0;
+    }
+    if (s.flags.replays >= REPLAY_LIMIT) {
+      xp *= 0.1;
+      coin *= 0.1;
+    }
+    s.flags.replays++;
+  }
+  return { xp: Math.round(xp), coin: Math.round(coin), dust };
+}
+
+// Spoils for a fight played on the battle screen. Items can drop, and experience applies at once.
+function battleRewards(s, enemies, nodeId, day) {
+  const r = nodeRewards(s, enemies, nodeId, day);
+  addCoin(s, r.coin);
+  addDust(s, r.dust);
+  const drops = {};
+  enemies.forEach((e) => {
+    s.codex.monsters[e.id] = true;
+    if (e.def_.boss) return;
+    const roll = Math.random();
+    if (roll < 0.1) drops.pill = (drops.pill || 0) + 1;
+    else if (roll < 0.15) drops.ether = (drops.ether || 0) + 1;
+    else if (roll < 0.22) drops.seal = (drops.seal || 0) + 1;
+  });
+  addItems(s, drops);
+  const ups = shareXp(s, r.xp);
+  return { xp: r.xp, coin: r.coin, dust: r.dust, drops, ups };
 }
 
 function addSpirits(s, ids) {
@@ -150,6 +237,17 @@ function chapterCleared(s, ci) {
   return CHAPTERS[ci].nodes.every((n) => n.type === 'chest' || s.progress.cleared[n.id]);
 }
 
+function chaptersDone(s) {
+  let n = 0;
+  while (n < CHAPTERS.length && chapterCleared(s, n)) n++;
+  return n;
+}
+
+function unlocked(s, feature) {
+  const u = W.UNLOCKS[feature];
+  return !u || !!s.progress.cleared[u.node];
+}
+
 // Marks a node as done. The caller decides when, because story beats may come first.
 function clearNode(s, nodeId) {
   const { node, ci } = NODE_INDEX[nodeId];
@@ -176,42 +274,23 @@ function starsForBoss(nodeId) {
   return ni === chapter.nodes.length - 1 ? 6 : 5;
 }
 
-function claimChest(s, nodeId) {
-  const { node } = NODE_INDEX[nodeId];
-  if (s.progress.cleared[nodeId]) return null;
-  s.progress.cleared[nodeId] = true;
-  addDust(s, node.reward.dust || 0);
-  addItems(s, node.reward.items);
-  return node.reward;
-}
-
-// Paying for a star opens its gate for good, so losing the boss fight never costs currency twice.
-function lightGate(s, nodeId) {
-  const { node } = NODE_INDEX[nodeId];
-  if (s.progress.lit[nodeId] || !node.cost) return true;
-  if (!spend(s, node.cost)) return false;
-  s.progress.lit[nodeId] = true;
-  return true;
-}
-
-function gateOpen(s, nodeId) {
-  const { node } = NODE_INDEX[nodeId];
-  return !node.cost || !!s.progress.lit[nodeId];
-}
-
-// A small daily wage from the station, so players who keep WeRun off can still finish the story.
+// A small daily wage from the station. It grows with how high the player has climbed the sky stair.
 const STIPEND = 100;
+function stipendAmount(s) {
+  return STIPEND + Math.min(150, s.tower.best * 2);
+}
 function claimStipend(s, day) {
   if (s.flags.stipendDay === day) return 0;
   s.flags.stipendDay = day;
-  addDust(s, STIPEND);
-  return STIPEND;
+  const n = stipendAmount(s);
+  addDust(s, n);
+  return n;
 }
 
 function buyItem(s, id, n) {
   const count = n || 1;
   const cost = D.ITEMS[id].price * count;
-  if (!spend(s, cost)) return false;
+  if (!spendCoin(s, cost)) return false;
   s.items[id] = (s.items[id] || 0) + count;
   return true;
 }
@@ -219,34 +298,85 @@ function buyItem(s, id, n) {
 function train(s, heroId, track) {
   const t = s.heroes[heroId].train;
   if (t[track] >= D.TRAIN_MAX) return false;
-  if (!spend(s, D.trainCost(t[track]))) return false;
+  if (!spendCoin(s, D.trainCost(t[track]))) return false;
   t[track]++;
   return true;
+}
+
+// One tap spends coins on the cheapest useful tier across the party until none is affordable.
+function autoTrain(s) {
+  const bought = {};
+  let n = 0;
+  for (let guard = 0; guard < 400; guard++) {
+    let best = null;
+    D.HERO_ORDER.forEach((id) => {
+      if (!s.heroes[id].joined) return;
+      ['atk', 'def', 'hp', 'spd'].forEach((k) => {
+        const lv = s.heroes[id].train[k];
+        // Speed is a smaller stat, so it follows the others instead of leading them.
+        const cost = lv < D.TRAIN_MAX ? D.trainCost(lv) * (k === 'spd' ? 2.2 : 1) : Infinity;
+        if (!best || cost < best.cost) best = { id, k, cost, real: D.trainCost(lv) };
+      });
+    });
+    if (!best || best.cost === Infinity || s.coin < best.real) break;
+    train(s, best.id, best.k);
+    bought[best.id] = (bought[best.id] || 0) + 1;
+    n++;
+  }
+  return { n, bought };
 }
 
 function previewRefine(aId, bId) {
   const a = D.MONSTERS[aId], b = D.MONSTERS[bId];
   const type = D.relicKey(a.el, b.el);
   const rank = D.rankFor(a.tier + b.tier);
-  return { type, rank, cost: D.RANKS[rank].cost, def: D.RELICS[type], family: D.REFINE_FAMILY(a.el, b.el) };
+  return { type, rank, cost: D.RANKS[rank].cost, mins: D.RANKS[rank].mins, def: D.RELICS[type], family: D.REFINE_FAMILY(a.el, b.el) };
 }
 
-function refine(s, aId, bId) {
+const FURNACE_SLOTS = 2;
+
+// Refining takes real time, so the furnace keeps working while the player is away.
+function startRefine(s, aId, bId, now) {
+  if (s.furnace.jobs.length >= FURNACE_SLOTS) return null;
   const need = {};
   need[aId] = (need[aId] || 0) + 1;
   need[bId] = (need[bId] || 0) + 1;
   if (Object.keys(need).some((k) => (s.spirits[k] || 0) < need[k])) return null;
   const p = previewRefine(aId, bId);
-  if (!spend(s, p.cost)) return null;
+  if (!spendCoin(s, p.cost)) return null;
   Object.keys(need).forEach((k) => {
     s.spirits[k] -= need[k];
     if (!s.spirits[k]) delete s.spirits[k];
   });
-  const item = { uid: 'r' + ++s.relicSeq, type: p.type, rank: p.rank };
-  s.relics.push(item);
-  const best = s.codex.recipes[p.type];
-  if (best === undefined || best < p.rank) s.codex.recipes[p.type] = p.rank;
-  return item;
+  const job = { type: p.type, rank: p.rank, doneAt: now + p.mins * 60000 };
+  s.furnace.jobs.push(job);
+  return job;
+}
+
+// Hands over every finished relic.
+function collectRefined(s, now) {
+  const done = [];
+  s.furnace.jobs = s.furnace.jobs.filter((j) => {
+    if (j.doneAt > now) return true;
+    const item = { uid: 'r' + ++s.relicSeq, type: j.type, rank: j.rank };
+    s.relics.push(item);
+    const best = s.codex.recipes[j.type];
+    if (best === undefined || best < j.rank) s.codex.recipes[j.type] = j.rank;
+    done.push(item);
+    return false;
+  });
+  return done;
+}
+
+// Spare relics can be melted down. Nothing equipped can be melted by accident.
+function meltRelic(s, uid) {
+  if (relicOwner(s, uid)) return 0;
+  const i = s.relics.findIndex((r) => r.uid === uid);
+  if (i < 0) return 0;
+  const value = Math.round(D.RANKS[s.relics[i].rank].cost * 0.4);
+  s.relics.splice(i, 1);
+  addCoin(s, value);
+  return value;
 }
 
 function equipRelic(s, heroId, slot, uid) {
@@ -266,7 +396,8 @@ function relicOwner(s, uid) {
 }
 
 module.exports = {
-  defaultSave, upgrade, addDust, addItems, canAfford, spend, applyGrants, addXp, battleRewards, addSpirits, joinHero,
-  nodeUnlocked, chapterCleared, clearNode, starsLit, claimChest, lightGate, gateOpen, claimStipend, STIPEND, buyItem, train, previewRefine, refine, equipRelic, unequipRelic,
-  relicOwner, enemyXp, enemyDust,
+  defaultSave, upgrade, addDust, addCoin, addItems, addHerbs, canAfford, spendDust, spendCoin, applyGrants, addXp, shareXp,
+  battleRewards, nodeRewards, addSpirits, joinHero, nodeUnlocked, chapterCleared, chaptersDone, unlocked, clearNode, starsLit,
+  claimStipend, stipendAmount, STIPEND, buyItem, train, autoTrain, previewRefine, startRefine, collectRefined, meltRelic, FURNACE_SLOTS,
+  equipRelic, unequipRelic, relicOwner, STEPS_PER_LI, STEPS_PER_ROLL, REPLAY_LIMIT,
 };

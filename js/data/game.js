@@ -97,7 +97,7 @@ const HEROES = {
   },
 };
 const HERO_ORDER = ['cen', 'ruo', 'zhuo'];
-const MAX_LEVEL = 50;
+const MAX_LEVEL = 120;
 
 // art: sprite to draw. hp/atk/def/spd multiply the level curve in party.js.
 const MONSTERS = {
@@ -133,36 +133,41 @@ const MONSTERS = {
   // Bosses: pattern loops in order. Charged skills take two turns, and the warning is the cue to guard.
   vineMother: { name: '百岁藤', art: 'vineMother', el: 'wood', boss: true, hp: 6.5, atk: 1.1, def: 1, spd: 0.8, pattern: ['lash', 'spores', 'lash', 'bloom'], phases: [{ at: 0.5, text: '断枝之处,开出了更多的花', status: 'atkUp' }] },
   crow: { name: '焚天鸦', art: 'crow', el: 'fire', boss: true, hp: 6.5, atk: 1.12, def: 0.95, spd: 1.05, pattern: ['ember', 'flare', 'ember', 'sunfire'], phases: [{ at: 0.5, text: '它的羽毛烧成了白色', status: 'atkUp' }] },
-  general: { name: '陶俑将军', art: 'general', el: 'earth', boss: true, hp: 7, atk: 1.12, def: 1.3, spd: 0.75, pattern: ['slam', 'dustup', 'slam', 'charge'], phases: [{ at: 0.5, text: '他说:此阵,不可退', status: 'defUp' }] },
-  tiger: { name: '白虎魄', art: 'tiger', el: 'metal', boss: true, hp: 6.8, atk: 1.18, def: 1, spd: 1.2, pattern: ['slice', 'gale', 'slice', 'autumnPunish'], phases: [{ at: 0.5, text: '虎啸之下,落叶皆成刀', status: 'atkUp' }] },
-  frostDragon: { name: '霜蛟', art: 'frostDragon', el: 'water', boss: true, hp: 7.2, atk: 1.16, def: 1.1, spd: 1, pattern: ['frost', 'blizzard', 'frost', 'glacier'], phases: [{ at: 0.5, text: '冰甲又厚了一层', status: 'defUp' }] },
+  general: { name: '陶俑将军', art: 'general', el: 'earth', boss: true, hp: 8.4, atk: 1.26, def: 1.3, spd: 0.75, pattern: ['slam', 'dustup', 'slam', 'charge'], phases: [{ at: 0.5, text: '他说:此阵,不可退', status: 'defUp' }] },
+  tiger: { name: '白虎魄', art: 'tiger', el: 'metal', boss: true, hp: 6.6, atk: 1.04, def: 1, spd: 1.2, pattern: ['slice', 'gale', 'slice', 'autumnPunish'], phases: [{ at: 0.5, text: '虎啸之下,落叶皆成刀', status: 'atkUp' }] },
+  frostDragon: { name: '霜蛟', art: 'frostDragon', el: 'water', boss: true, hp: 9, atk: 1.26, def: 1.1, spd: 1, pattern: ['frost', 'blizzard', 'frost', 'glacier'], phases: [{ at: 0.5, text: '冰甲又厚了一层', status: 'defUp' }] },
   pei1: { name: '裴玄度', art: 'pei1', el: 'water', boss: true, hp: 7, atk: 1.16, def: 1.05, spd: 1.15, pattern: ['voidtouch', 'starfall', 'frost', 'stopTime'], phases: [{ at: 0.5, text: '他收起了那一点怜悯', status: 'atkUp' }] },
   pei2: { name: '裴玄度·定星', art: 'pei2', el: 'fire', boss: true, hp: 8.5, atk: 1.2, def: 1.1, spd: 1.2, pattern: ['starfall', 'voidtouch', 'flare', 'stopTime'], phases: [{ at: 0.66, text: '天枢、天璇、天玑,一一暗去', status: 'atkUp' }, { at: 0.33, text: '他已经不再看你了', status: 'defUp' }] },
 };
 
 const ITEMS = {
-  pill: { name: '回春丹', icon: 'pill', price: 30, use: 'heal', desc: '恢复一名同伴 40% 气血', target: 'ally' },
-  ether: { name: '聚气散', icon: 'ether', price: 40, use: 'mp', desc: '恢复一名同伴 50% 灵力', target: 'ally' },
-  incense: { name: '还魂香', icon: 'incense', price: 120, use: 'revive', desc: '复活同伴并恢复 50% 气血', target: 'ko' },
-  seal: { name: '封灵符', icon: 'seal', price: 25, use: 'seal', desc: '封印虚弱的妖灵,血量越低越易成功', target: 'enemy' },
+  pill: { name: '回春丹', icon: 'pill', price: 1500, use: 'heal', desc: '恢复一名同伴 40% 气血', target: 'ally' },
+  ether: { name: '聚气散', icon: 'ether', price: 2000, use: 'mp', desc: '恢复一名同伴 50% 灵力', target: 'ally' },
+  incense: { name: '还魂香', icon: 'incense', price: 9000, use: 'revive', desc: '复活同伴并恢复 50% 气血', target: 'ko' },
+  seal: { name: '封灵符', icon: 'seal', price: 1200, use: 'seal', desc: '封印虚弱的妖灵,血量越低越易成功', target: 'enemy' },
 };
 
+// Training is paid in coins and has many small tiers, so there is always one more to buy.
 const TRAIN = {
-  hp: { name: '气血', pct: 0.06, unit: '%', desc: '每层气血 +6%', icon: 'pill' },
-  atk: { name: '攻伐', pct: 0.05, unit: '%', desc: '每层攻击 +5%', icon: 'sword' },
-  def: { name: '护体', pct: 0.05, unit: '%', desc: '每层防御 +5%', icon: 'shield' },
-  spd: { name: '身法', pct: 0.03, unit: '%', desc: '每层速度 +3%', icon: 'boot' },
+  hp: { name: '气血', pct: 0.03, unit: '%', desc: '每层气血 +3%', icon: 'pill' },
+  atk: { name: '攻伐', pct: 0.025, unit: '%', desc: '每层攻击 +2.5%', icon: 'sword' },
+  def: { name: '护体', pct: 0.025, unit: '%', desc: '每层防御 +2.5%', icon: 'shield' },
+  spd: { name: '身法', pct: 0.015, unit: '%', desc: '每层速度 +1.5%', icon: 'boot' },
 };
-const TRAIN_MAX = 15;
-const trainCost = (lv) => Math.round((40 * Math.pow(1.22, lv)) / 5) * 5;
+const TRAIN_MAX = 60;
+const trainCost = (lv) => Math.round((1200 * Math.pow(1.19, lv)) / 100) * 100;
 
-const xpNeed = (lv) => Math.round(18 + 9 * lv + 1.0 * lv * lv);
+const xpNeed = (lv) => 300 + 200 * lv + 120 * lv * lv + 50 * lv * lv * lv;
+
+// Road income per minute at a given enemy level.
+const coinPerMin = (lv) => 140 * Math.pow(1.03, lv);
+const xpPerMin = (lv) => 70 + 5 * lv;
 
 // Relics refined from two spirits: the element pair picks the family, combined tier picks the rank.
 const RANKS = [
-  { name: '凡', css: '#d9c9a3', cost: 150 },
-  { name: '灵', css: '#6fb0e0', cost: 450 },
-  { name: '仙', css: '#f7dd7a', cost: 1200 },
+  { name: '凡', css: '#d9c9a3', cost: 4000, mins: 5 },
+  { name: '灵', css: '#6fb0e0', cost: 50000, mins: 30 },
+  { name: '仙', css: '#f7dd7a', cost: 300000, mins: 120 },
 ];
 function rankFor(tierSum) {
   return tierSum >= 6 ? 2 : tierSum >= 4 ? 1 : 0;
@@ -201,5 +206,5 @@ const SHOP_LIST = ['pill', 'ether', 'seal', 'incense'];
 
 module.exports = {
   ELEMENTS, OVERCOMES, GENERATES, elementMult, STATUS, SKILLS, HEROES, HERO_ORDER, MAX_LEVEL, MONSTERS, ITEMS,
-  TRAIN, TRAIN_MAX, trainCost, xpNeed, RANKS, rankFor, RELICS, relicKey, relicDesc, REFINE_FAMILY, SHOP_LIST,
+  TRAIN, TRAIN_MAX, trainCost, xpNeed, coinPerMin, xpPerMin, RANKS, rankFor, RELICS, relicKey, relicDesc, REFINE_FAMILY, SHOP_LIST,
 };

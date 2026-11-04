@@ -1,5 +1,6 @@
 // World structure. Each chapter is one region, one season, one fallen star.
-// node types: fight | elite | event | chest | boss. needSteps gates optional paths behind real walking.
+// node types: fight | elite | event | chest | boss. Chests are optional and open with footpower, which
+// real steps and time on the road both build up (see systems/idle.js), so nobody is locked out.
 function f(id, lv, foes, extra) {
   return Object.assign({ id, type: 'fight', lv, foes }, extra || {});
 }
@@ -9,11 +10,11 @@ function e(id, lv, foes, extra) {
 function evt(id, key) {
   return { id, type: 'event', key };
 }
-function chest(id, needSteps, reward) {
-  return { id, type: 'chest', needSteps, reward };
+function chest(id, needFoot, reward) {
+  return { id, type: 'chest', needFoot, reward };
 }
-function boss(id, lv, foes, cost, extra) {
-  return Object.assign({ id, type: 'boss', lv, foes, cost }, extra || {});
+function boss(id, lv, foes, extra) {
+  return Object.assign({ id, type: 'boss', lv, foes }, extra || {});
 }
 
 const CHAPTERS = [
@@ -28,7 +29,7 @@ const CHAPTERS = [
       chest('c1e', 3000, { dust: 100, items: { pill: 2, seal: 2 } }),
       e('c1f', 5, ['xiaoKing', 'floral']),
       f('c1g', 5, ['floral', 'xiao', 'vine']),
-      boss('c1h', 6, ['vineMother'], 500, { before: 'c1_boss', after: 'c1_after' }),
+      boss('c1h', 6, ['vineMother'], { before: 'c1_boss', after: 'c1_after' }),
     ],
   },
   {
@@ -42,7 +43,7 @@ const CHAPTERS = [
       chest('c2e', 15000, { dust: 200, items: { ether: 2, seal: 2 } }),
       e('c2f', 11, ['bifang2', 'wisp']),
       f('c2g', 11, ['wisp', 'firerat', 'bifang'], { before: 'c2_pei' }),
-      boss('c2h', 13, ['crow'], 1000, { before: 'c2_boss', after: 'c2_after' }),
+      boss('c2h', 13, ['crow'], { before: 'c2_boss', after: 'c2_after' }),
     ],
   },
   {
@@ -56,7 +57,7 @@ const CHAPTERS = [
       chest('c3e', 40000, { dust: 300, items: { incense: 1, seal: 3 } }),
       e('c3f', 18, ['clay2', 'clay']),
       f('c3g', 18, ['clay', 'ram', 'worm']),
-      boss('c3h', 20, ['general'], 1800, { before: 'c3_boss', after: 'c3_after' }),
+      boss('c3h', 20, ['general'], { before: 'c3_boss', after: 'c3_after' }),
     ],
   },
   {
@@ -70,7 +71,7 @@ const CHAPTERS = [
       chest('c4e', 80000, { dust: 400, items: { incense: 2, ether: 3 } }),
       e('c4f', 26, ['blade2', 'cicada']),
       f('c4g', 26, ['blade', 'scorpion', 'cicada'], { after: 'c4_truth' }),
-      boss('c4h', 28, ['tiger'], 2800, { before: 'c4_boss', after: 'c4_after' }),
+      boss('c4h', 28, ['tiger'], { before: 'c4_boss', after: 'c4_after' }),
     ],
   },
   {
@@ -84,7 +85,7 @@ const CHAPTERS = [
       chest('c5e', 120000, { dust: 500, items: { incense: 2, seal: 4 } }),
       e('c5f', 34, ['merfolk2', 'serpent'], { after: 'c5_coffin' }),
       f('c5g', 34, ['serpent', 'merfolk', 'grub']),
-      boss('c5h', 36, ['frostDragon'], 3800, { before: 'c5_boss', after: 'c5_after' }),
+      boss('c5h', 36, ['frostDragon'], { before: 'c5_boss', after: 'c5_after' }),
     ],
   },
   {
@@ -97,8 +98,8 @@ const CHAPTERS = [
       e('c6d', 40, ['shade2', 'puppet']),
       chest('c6e', 160000, { dust: 600, items: { incense: 3, ether: 3 } }),
       f('c6f', 41, ['puppet', 'shade', 'puppet']),
-      boss('c6g', 43, ['pei1'], 5000, { before: 'c6_boss1', after: 'c6_mid' }),
-      boss('c6h', 45, ['pei2'], 0, { before: 'c6_boss2', after: 'final' }),
+      boss('c6g', 43, ['pei1'], { before: 'c6_boss1', after: 'c6_mid' }),
+      boss('c6h', 45, ['pei2'], { before: 'c6_boss2', after: 'final' }),
     ],
   },
 ];
@@ -106,6 +107,13 @@ const CHAPTERS = [
 const NODE_INDEX = {};
 CHAPTERS.forEach((c, ci) => c.nodes.forEach((n, ni) => { NODE_INDEX[n.id] = { chapter: c, ci, ni, node: n }; }));
 
+// Every node in walking order, which is how the idle march sees the world.
+const FLAT = [];
+CHAPTERS.forEach((c, ci) => c.nodes.forEach((n) => {
+  NODE_INDEX[n.id].flat = FLAT.length;
+  FLAT.push({ node: n, ci, chapter: c });
+}));
+
 const STAR_NAMES = ['天枢', '天璇', '天玑', '天权', '玉衡', '开阳', '摇光'];
 
-module.exports = { CHAPTERS, NODE_INDEX, STAR_NAMES };
+module.exports = { CHAPTERS, NODE_INDEX, FLAT, STAR_NAMES };

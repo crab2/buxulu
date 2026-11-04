@@ -176,7 +176,7 @@ function privacyPrompt(resolve) {
   resolve({ event: 'exposureAuthorization' });
   modal({
     title: '用户隐私保护提示',
-    text: '《步虚录》需要读取你的微信运动步数,用来兑换游戏内的星砂。步数只用于此项功能。你可以拒绝,拒绝后仍能正常游戏。',
+    text: '《步虚录》需要读取你的微信运动步数,用来兑换游戏内的星砂。步数只用于此项功能。你可以拒绝,拒绝后游戏进度不受任何影响。',
     stack: true,
     buttons: [
       { label: '同意并继续', kind: 'primary', onTap: () => resolve({ event: 'agree' }) },
@@ -189,6 +189,7 @@ function privacyPrompt(resolve) {
 function rewardRows(r) {
   const D_ = require('../data/game.js');
   const rows = [];
+  if (r.coin) rows.push({ icon: 'coin', label: '铜钱', value: '+' + ui.fmt(r.coin) });
   if (r.dust) rows.push({ icon: 'dust', label: '星砂', value: '+' + ui.fmt(r.dust) });
   Object.keys(r.items || {}).forEach((k) => {
     rows.push({ icon: D_.ITEMS[k].icon, label: D_.ITEMS[k].name, value: '×' + r.items[k] });

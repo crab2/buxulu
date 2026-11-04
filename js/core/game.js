@@ -48,6 +48,8 @@ const game = {
   timeScale: 1, // Automated tests raise this to fast-forward animations.
   transition: null,
   errors: [],
+  onTick: null, // Runs every frame whatever is on screen. The idle march hangs off this.
+  lastTouch: 0,
 
   register(name, cls) {
     this.scenes[name] = cls;
@@ -100,6 +102,7 @@ function hitAt(x, y) {
 }
 
 wx.onTouchStart((e) => {
+  game.lastTouch = Date.now();
   if (touch.id !== null || game.transition) return;
   const t = e.changedTouches[0];
   const p = point(t);
@@ -194,12 +197,17 @@ function frame() {
         } else game.transition = null;
       }
     }
+    if (game.onTick) game.onTick(dt);
     const top = game.top();
     game.stack.forEach((s) => {
       if (s === top || s.alwaysUpdate) s.update && s.update(dt);
     });
     if (ui.state.toastT > 0) ui.state.toastT -= dt;
     ui.state.hits.length = 0;
+    if (ui.state.debug) {
+      ui.state.boxes.length = 0;
+      ui.state.texts.length = 0;
+    }
     ui.ctx.fillStyle = '#0b0a14';
     ui.ctx.fillRect(0, 0, D.W, D.H);
     game.stack.forEach((s) => {

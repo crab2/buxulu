@@ -65,7 +65,7 @@ html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);overflow:hid
 #note b{display:block;font-size:22px;color:var(--fg);margin-bottom:8px;font-weight:600;letter-spacing:.08em}
 @media (min-width:760px){#note{display:block}}
 @media (max-width:520px){#wrap{padding-block:0}#phone{width:100%;height:100%;max-height:none;aspect-ratio:auto;border-radius:0;box-shadow:none}}`;
-  const note = '<div id="note"><b>步虚录</b>Web preview of the WeChat mini-game. Steps are simulated here: on 步虚台 (the Step Altar), tap <em>+2000 步</em> to pretend you went for a walk. Progress is saved in this browser.</div>';
+  const note = '<div id="note"><b>步虚录</b>Web preview of the WeChat idle game. The party walks on while you are away. Steps and time are simulated here: on 步虚台 (the Step Altar), <em>+2000 步</em> pretends you went for a walk and <em>时间快进</em> skips an hour. Progress is saved in this browser.</div>';
   const scripts = `<script>window.__AUDIO__=${JSON.stringify(audio)};window.__PREVIEW__=true;</script>
 <script>${shim.replace(/<\/script/g, '<\\/script')}</script>
 <script>${code.replace(/<\/script/g, '<\\/script')}</script>`;

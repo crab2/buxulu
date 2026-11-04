@@ -8,5 +8,5 @@ module.exports = {
   // 'mock'  : always simulate. Never active in a release build (see systems/steps.js).
   STEP_BACKEND: 'auto',
 
-  VERSION: '1.0.0',
+  VERSION: '2.0.0',
 };
