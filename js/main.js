@@ -18,6 +18,8 @@ require('./scenes/trials.js');
 require('./scenes/map.js');
 require('./scenes/battle.js');
 require('./scenes/party.js');
+require('./scenes/gear.js');
+require('./scenes/gacha.js');
 require('./scenes/ending.js');
 
 store.load();
@@ -125,5 +127,8 @@ store.pull().then((replaced) => {
 });
 
 if (typeof GameGlobal !== 'undefined' && GameGlobal.__PREVIEW__) {
-  GameGlobal.__BUXU__ = { game, store, steps, clock, idle: Idle, art, chapters: require('./data/chapters.js'), ui: require('./core/ui.js'), font: require('./core/font.js') };
+  GameGlobal.__BUXU__ = {
+    game, store, steps, clock, idle: Idle, art, chapters: require('./data/chapters.js'), ui: require('./core/ui.js'), font: require('./core/font.js'),
+    party: require('./systems/party.js'), gear: require('./systems/gear.js'), gacha: require('./systems/gacha.js'), gearData: require('./data/gear.js'),
+  };
 }

@@ -9,6 +9,7 @@ const FREE_CAP = 3;
 const REGEN_MS = 4 * 3600000;
 const TILE_MINS = 12;
 const LAP_DUST = 100;
+const LAP_TICKETS = 1;
 
 // Free rolls refill up to a small cap. Rolls earned from steps or Stardust can stack above it.
 function regen(s, now) {
@@ -97,6 +98,7 @@ function roll(s, now, rng) {
   if (lapped) {
     w.laps++;
     E.addDust(s, LAP_DUST);
+    s.gacha.tickets += LAP_TICKETS;
   }
   const out = land(s, tile, r);
   out.die = die;
@@ -108,4 +110,4 @@ function roll(s, now, rng) {
   return out;
 }
 
-module.exports = { regen, roll, FREE_CAP, REGEN_MS, LAP_DUST, TILE_MINS };
+module.exports = { regen, roll, FREE_CAP, REGEN_MS, LAP_DUST, LAP_TICKETS, TILE_MINS };

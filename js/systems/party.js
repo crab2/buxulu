@@ -1,5 +1,6 @@
 // Turns save data into combat units. Pure logic with no dependency on the WeChat runtime.
 const D = require('../data/game.js');
+const Gear = require('./gear.js');
 
 function relicMods(heroSave, save) {
   const mods = {};
@@ -19,6 +20,8 @@ function heroStats(save, id) {
   const hs = save.heroes[id];
   const lv = hs.lv;
   const m = relicMods(hs, save);
+  const gearMods = Gear.mods(save, id);
+  Object.keys(gearMods).forEach((k) => { m[k] = (m[k] || 0) + gearMods[k]; });
   const t = hs.train;
   const grow = (k) => def.base[k] + def.grow[k] * (lv - 1);
   // Star relics lit so far strengthen the whole party a little.
@@ -52,11 +55,14 @@ function enemyUnit(id, lv, index) {
   const m = D.MONSTERS[id];
   // Enemies gain a little extra with level, so party level keeps its meaning all the way up the road.
   const hard = 1 + 0.022 * lv;
-  const hp = Math.round((52 + 25 * lv) * m.hp * hard);
+  // Equipment adds up along the road, so the road keeps pace with it. tests/simulate.js sets this figure:
+  // it holds the published pace for a player who uses equipment, and the first region barely changes.
+  const geared = 1 + 0.007 * lv;
+  const hp = Math.round((52 + 25 * lv) * m.hp * hard * geared);
   return {
     id, key: id + index, side: 'enemy', name: m.name, el: m.el, lv, def_: m,
     maxHp: hp, hp, maxMp: 0, mp: 0,
-    atk: Math.round((12 + 4.7 * lv) * m.atk * (1 + 0.017 * lv)),
+    atk: Math.round((12 + 4.7 * lv) * m.atk * (1 + 0.017 * lv) * geared),
     def: Math.round((4 + 1.7 * lv) * m.def),
     spd: Math.round((10 + 0.35 * lv) * m.spd * 10) / 10,
     mods: {}, skills: m.skills || [], statuses: {}, ct: Math.random() * 30, alive: true,

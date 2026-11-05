@@ -1,4 +1,4 @@
-// Party management (training, relics, skills) and the star furnace, the main sinks for Stardust.
+// Party management (equipment, training, relics, skills) and the star furnace.
 const game = require('../core/game.js');
 const ui = require('../core/ui.js');
 const D = require('../core/display.js');
@@ -10,6 +10,7 @@ const G = require('../data/game.js');
 const P = require('../systems/party.js');
 const O = require('./overlays.js');
 const nav = require('./nav.js');
+const GearUI = require('./gear.js');
 const Idle = require('../systems/idle.js');
 const Daily = require('../systems/daily.js');
 const Boosts = require('../systems/boosts.js');
@@ -90,6 +91,7 @@ class Party {
     ui.text(`气血 ${ui.num(st.hp)}  灵力 ${st.mp}`, tx, y + 46, UI.text);
     ui.text(`攻 ${st.atk}  防 ${st.def}  速 ${Math.round(st.spd)}`, tx, y + 60, UI.dim);
     y += 84;
+    y = GearUI.drawPanel(s, this.hero, y, m, w);
     // Training
     ui.panel(m, y, w, 30 * 4 + 56);
     ui.text('修炼', m + 10, y + 7, UI.gold);

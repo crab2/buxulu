@@ -17,6 +17,8 @@ const { UI } = require('../core/palette.js');
 const { dipperPoints } = require('../art/scenery.js');
 const Idle = require('../systems/idle.js');
 const Tower = require('../systems/tower.js');
+const Gear = require('../systems/gear.js');
+const F = require('../data/gear.js');
 const clock = require('../core/clock.js');
 
 const { W, H } = D;
@@ -227,6 +229,16 @@ class BattleScene {
         yield 0.2;
         break;
       }
+      case 'setfx': {
+        const p = this.center(e.target);
+        this.popText(p.x, p.y - 40, e.text, '#f7dd7a');
+        // Stacking effects fire every turn, so they stay out of the way.
+        if (e.quiet) break;
+        this.fx.burst(p.x, p.y, 'star', 16, 60);
+        audio.sfx('star');
+        yield 0.3;
+        break;
+      }
       case 'stunned': {
         const p = this.center(e.actor);
         this.popText(p.x, p.y - 22, '眩晕中', '#f7dd7a');
@@ -377,14 +389,17 @@ class BattleScene {
     let rw;
     if (this.p.tower) {
       const t = Tower.win(s, this.p.tower);
-      rw = t ? { xp: t.reward.xp, coin: t.reward.coin, dust: t.reward.dust, drops: t.reward.items, ups: t.ups } : { xp: 0, coin: 0, dust: 0, drops: {}, ups: [] };
+      rw = t ? { xp: t.reward.xp, coin: t.reward.coin, dust: t.reward.dust, drops: t.reward.items, ups: t.ups, tickets: t.reward.tickets } : { xp: 0, coin: 0, dust: 0, drops: {}, ups: [] };
     } else rw = E.battleRewards(s, this.all, nodeId, Idle.dayOf(clock.now()));
     if (b.sealed.length) {
       E.addSpirits(s, b.sealed);
       O.tip('seal', TIPS.seal);
     }
     let lit = false;
+    const letters = s.gacha.tickets;
     if (this.node) lit = E.clearNode(s, nodeId).litStar;
+    // Lighting a star sends letters, so they are shown along with the rest of the spoils.
+    rw.tickets = (rw.tickets || 0) + s.gacha.tickets - letters;
     if (s.idle.blocked) Idle.nudge(s);
     store.persist();
     if (rw.ups.length) audio.sfx('level');
@@ -690,6 +705,8 @@ class BattleScene {
     if (r.rw.coin) rows.push({ label: '铜钱', value: `+${ui.fmt(r.rw.coin)}`, c: UI.gold });
     if (r.rw.dust) rows.push({ label: '星砂', value: `+${ui.fmt(r.rw.dust)}`, c: UI.blue });
     Object.keys(r.rw.drops).forEach((k) => rows.push({ label: G.ITEMS[k].name, value: `×${r.rw.drops[k]}`, c: UI.text }));
+    if (r.rw.tickets) rows.push({ label: '星笺', value: `×${r.rw.tickets}`, c: UI.gold });
+    if (r.rw.gear) rows.push({ label: Gear.name(r.rw.gear), value: `${F.RARITIES[r.rw.gear.rar].name}品`, c: F.RARITIES[r.rw.gear.rar].css });
     r.sealed.forEach((id) => rows.push({ label: `${G.MONSTERS[id].name}之灵`, value: '已封印', c: UI.violet }));
     r.rw.ups.forEach((u) => rows.push({ label: `${G.HEROES[u.id].name} 升级`, value: `Lv ${u.lv}`, c: UI.peach }));
     const h = 66 + rows.length * 17 + 8;

@@ -42,6 +42,7 @@ function claimBonus(s, day) {
   if (!bonusReady(s, day)) return 0;
   s.daily.bonus = true;
   E.addDust(s, W.DAILY_BONUS.dust);
+  s.gacha.tickets += W.DAILY_BONUS.tickets;
   return W.DAILY_BONUS.dust;
 }
 

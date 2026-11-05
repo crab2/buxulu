@@ -305,6 +305,14 @@ function clearUpTo(s, id) {
     if (f.node.id === id) break;
   }
 }
+// Marks nodes cleared directly, as an old save's progress would be, without running any new rules.
+function clearUpToRaw(s, id) {
+  for (const f of FLAT) {
+    if (f.node.type !== 'chest') s.progress.cleared[f.node.id] = true;
+    if (f.node.type === 'boss') s.progress.stars = Math.max(s.progress.stars, f.ci + 1);
+    if (f.node.id === id) break;
+  }
+}
 function strongParty(s, lv, tier) {
   ['cen', 'ruo', 'zhuo'].forEach((id) => {
     const h = s.heroes[id];
@@ -509,14 +517,16 @@ test('every chest opens from time on the road alone, with no real steps', () => 
 
 test('balance: the whole game can be finished at every activity level, walking or not', () => {
   const { run, PROFILES } = require('./simulate.js');
+  // Single runs vary by several days, so a comparison between players needs a real sample.
+  const RUNS = 12;
   const avg = (p) => {
     let t = 0;
-    for (let i = 1; i <= 4; i++) {
+    for (let i = 1; i <= RUNS; i++) {
       const r = run(1234 * i, PROFILES[p]);
       assert.ok(r.finished, `${p} did not finish`);
       t += r.days;
     }
-    return t / 4;
+    return t / RUNS;
   };
   const none = avg('noneActive');
   const typical = avg('typical');
@@ -1109,6 +1119,838 @@ test('the save stays small enough for cloud backup, even after a long game', () 
   const { run, PROFILES } = require('./simulate.js');
   const r = run(4242, PROFILES.typical);
   assert.ok(JSON.stringify(r.s).length < 60 * 1024, `${JSON.stringify(r.s).length} bytes`);
+});
+
+// ---- Equipment ----
+const F = require('../js/data/gear.js');
+const Gear = require('../js/systems/gear.js');
+const Gacha = require('../js/systems/gacha.js');
+
+function wearSet(s, heroId, setId, rar) {
+  F.SLOT_ORDER.forEach((slot) => Gear.equip(s, heroId, Gear.add(s, { set: setId, slot, rar: rar || 0 }).uid));
+}
+function joinAll(s, lv) {
+  ['cen', 'ruo', 'zhuo'].forEach((id) => { s.heroes[id].joined = true; s.heroes[id].lv = lv || 30; });
+}
+function battleFor(s, foes, lv, rng) {
+  return new Battle({ heroes: P.partyUnits(s), enemies: foes.map((f, i) => P.enemyUnit(f, lv, i)), stars: 3, items: {}, rng: rng || seeded(11) });
+}
+
+test('every piece in the catalogue resolves, and the odds add up', () => {
+  assert.strictEqual(F.SET_ORDER.length, 7, 'one set for each star of the Dipper');
+  F.SET_ORDER.forEach((id) => {
+    const set = F.SETS[id];
+    assert.ok(set.name && set.two.desc && set.four.name && set.four.desc, id);
+    assert.ok(set.four.mods || set.four.party, `${id} has a four-piece effect that does something`);
+    assert.ok(typeof set.two.value === 'number' && set.two.stat, id);
+    G.HERO_ORDER.forEach((h) => assert.ok(set.fit[h] > 0, `${id} fit for ${h}`));
+  });
+  F.SLOT_ORDER.forEach((k) => assert.ok(F.SLOTS[k], k));
+  const sum = (a) => a.reduce((x, y) => x + y, 0);
+  assert.ok(Math.abs(sum(F.DRAW_RATES) - 1) < 1e-9, 'draw odds add up to 1');
+  assert.ok(Math.abs(sum(F.ROAD_RATES) - 1) < 1e-9, 'road odds add up to 1');
+  assert.strictEqual(F.DRAW_RATES.length, F.RARITIES.length);
+  assert.strictEqual(F.PROMOTE.length, F.RARITIES.length - 1);
+  assert.strictEqual(F.BOSS_RARITY.length, CHAPTERS.length);
+});
+
+test('every set, slot and rarity can be drawn, and the icons exist', () => {
+  const { gearIcon, cardFront, cardBack, letterBig } = require('../js/art/icons.js');
+  F.SET_ORDER.forEach((id) => F.SLOT_ORDER.forEach((slot) => F.RARITIES.forEach((r, i) => {
+    assert.ok(gearIcon(slot, F.SETS[id], i).d.some((c) => c !== -1), `${id} ${slot} ${i}`);
+  })));
+  F.RARITIES.forEach((r, i) => assert.ok(cardFront(i).d.some((c) => c !== -1)));
+  assert.ok(cardBack().d.some((c) => c !== -1));
+  assert.ok(letterBig().d.some((c) => c !== -1));
+  ['gear', 'iron', 'letter'].forEach((k) => assert.ok(ICONS[k], k));
+});
+
+test('a piece strengthens its slot\'s stat, and more with rarity and level', () => {
+  const s = E.defaultSave();
+  const base = P.heroStats(s, 'cen');
+  const p = Gear.add(s, { set: 'wolf', slot: 'blade', rar: 0 });
+  assert.strictEqual(P.heroStats(s, 'cen').atk, base.atk, 'in the bag it does nothing');
+  Gear.equip(s, 'cen', p.uid);
+  const worn = P.heroStats(s, 'cen');
+  assert.ok(worn.atk > base.atk);
+  assert.strictEqual(worn.def, base.def);
+  const low = { slot: 'blade', rar: 0, lv: 0 };
+  assert.ok(Gear.value({ slot: 'blade', rar: 3, lv: 0 }) > Gear.value({ slot: 'blade', rar: 2, lv: 0 }));
+  assert.ok(Gear.value({ slot: 'blade', rar: 0, lv: 5 }) > Gear.value(low));
+  F.SLOT_ORDER.forEach((slot) => {
+    const st = {};
+    const q = Gear.add(s, { set: 'wolf', slot, rar: 1 });
+    Gear.equip(s, 'ruo', q.uid);
+    st[F.SLOTS[slot].stat] = true;
+    assert.ok(Gear.mods(s, 'ruo')[F.SLOTS[slot].stat] > 0, slot);
+  });
+});
+
+test('upgrades charge exactly, refuse when short, and change nothing when refused', () => {
+  const s = E.defaultSave();
+  const p = Gear.add(s, { set: 'wolf', slot: 'blade', rar: 0 });
+  const c = F.levelCost(0);
+  assert.strictEqual(Gear.levelUp(s, p.uid), false, 'no money');
+  s.coin = c.coin;
+  assert.strictEqual(Gear.levelUp(s, p.uid), false, 'no iron');
+  assert.strictEqual(s.coin, c.coin, 'nothing was taken');
+  s.gear.iron = c.iron;
+  assert.strictEqual(Gear.levelUp(s, p.uid), true);
+  assert.strictEqual(s.coin, 0);
+  assert.strictEqual(s.gear.iron, 0);
+  assert.strictEqual(Gear.find(s, p.uid).lv, 1);
+});
+
+test('a piece stops at its rarity\'s cap until promoted, and promotion keeps its levels', () => {
+  const s = E.defaultSave();
+  s.coin = 1e12;
+  s.gear.iron = 1e6;
+  const { uid } = Gear.add(s, { set: 'wolf', slot: 'blade', rar: 0 });
+  const p = Gear.find(s, uid);
+  assert.strictEqual(Gear.promote(s, uid), false, 'not at the cap yet');
+  while (Gear.levelUp(s, uid));
+  assert.strictEqual(p.lv, F.RARITIES[0].cap);
+  assert.strictEqual(Gear.levelUp(s, uid), false);
+  const before = Gear.value(p);
+  assert.strictEqual(Gear.promote(s, uid), true);
+  assert.strictEqual(p.rar, 1);
+  assert.strictEqual(p.lv, F.RARITIES[0].cap, 'levels are kept');
+  assert.ok(Gear.value(p) > before);
+  assert.strictEqual(Gear.levelUp(s, uid), true, 'and there is room to climb again');
+});
+
+test('coins and iron alone take a plain piece from the road to the very top', () => {
+  const s = E.defaultSave();
+  s.coin = 1e12;
+  s.gear.iron = 1e6;
+  const dust = s.stardust;
+  const { uid } = Gear.add(s, { set: 'wolf', slot: 'blade', rar: 0 });
+  const p = Gear.find(s, uid);
+  for (let guard = 0; guard < 200; guard++) {
+    if (!Gear.levelUp(s, uid) && !Gear.promote(s, uid)) break;
+  }
+  assert.strictEqual(p.rar, F.RARITIES.length - 1);
+  assert.strictEqual(p.lv, F.RARITIES[F.RARITIES.length - 1].cap);
+  assert.strictEqual(Gear.nextStep(p), null);
+  assert.strictEqual(s.stardust, dust, 'no Stardust anywhere on the way');
+  assert.strictEqual(s.gacha.total, 0, 'and no draws');
+});
+
+test('a piece can only be worn by one hero at a time', () => {
+  const s = E.defaultSave();
+  const p = Gear.add(s, { set: 'wolf', slot: 'blade', rar: 0 });
+  Gear.equip(s, 'cen', p.uid);
+  Gear.equip(s, 'ruo', p.uid);
+  assert.strictEqual(s.heroes.cen.gear.blade, null);
+  assert.strictEqual(Gear.owner(s, p.uid), 'ruo');
+  const q = Gear.add(s, { set: 'gate', slot: 'blade', rar: 0 });
+  Gear.equip(s, 'ruo', q.uid);
+  assert.strictEqual(Gear.owner(s, p.uid), null, 'a new piece replaces the old one in that slot');
+});
+
+test('set bonuses need 2 and 4 pieces of one set, of any rarity, on one hero', () => {
+  const s = E.defaultSave();
+  const wear = (id, set, slot, rar) => Gear.equip(s, id, Gear.add(s, { set, slot, rar }).uid);
+  const two = F.SETS.gate.two;
+  wear('cen', 'gate', 'blade', 0);
+  assert.strictEqual(Gear.mods(s, 'cen').defPct, undefined, 'one piece is not a set');
+  wear('cen', 'gate', 'boots', 3);
+  assert.strictEqual(Gear.mods(s, 'cen').defPct, two.value, 'two pieces, mixed rarity');
+  assert.strictEqual(Gear.mods(s, 'cen').lastStand, undefined, 'two pieces is not four');
+  wear('cen', 'gate', 'charm', 1);
+  assert.strictEqual(Gear.mods(s, 'cen').lastStand, undefined, 'three pieces is not four');
+  wear('ruo', 'gate', 'coat', 0);
+  assert.strictEqual(Gear.mods(s, 'cen').lastStand, undefined, 'pieces on another hero do not count');
+  wear('cen', 'gate', 'coat', 0);
+  assert.strictEqual(Gear.mods(s, 'cen').lastStand, F.SETS.gate.four.mods.lastStand);
+});
+
+test('two different sets can both be half worn', () => {
+  const s = E.defaultSave();
+  ['blade', 'coat'].forEach((slot) => Gear.equip(s, 'cen', Gear.add(s, { set: 'wolf', slot, rar: 0 }).uid));
+  ['boots', 'charm'].forEach((slot) => Gear.equip(s, 'cen', Gear.add(s, { set: 'lian', slot, rar: 0 }).uid));
+  const m = Gear.mods(s, 'cen');
+  assert.strictEqual(m.crit, F.SETS.lian.two.value);
+  assert.ok(m.atkPct > F.SETS.wolf.two.value, 'the set bonus adds to the piece\'s own attack');
+});
+
+// ---- The seven four-piece effects, each through the real combat code ----
+test('贪狼: attack climbs with every action, up to its limit', () => {
+  const s = E.defaultSave();
+  joinAll(s);
+  wearSet(s, 'cen', 'wolf');
+  const b = battleFor(s, ['vineMother'], 30);
+  const c = b.heroes[0];
+  const start = b.stat(c, 'atk');
+  b.perform(c, { kind: 'attack', target: b.enemies[0] });
+  assert.ok(Math.abs(b.stat(c, 'atk') / start - 1.04) < 0.001, 'one action, one step');
+  for (let i = 0; i < 20; i++) b.perform(c, { kind: 'guard' });
+  assert.ok(Math.abs(b.stat(c, 'atk') / start - 1.04) < 0.001, 'guarding is not an attack');
+  for (let i = 0; i < 20; i++) b.perform(c, { kind: 'attack', target: b.enemies[0] });
+  assert.ok(Math.abs(b.stat(c, 'atk') / start - 1.24) < 0.001, 'stops at the limit');
+  const fresh = battleFor(s, ['vineMother'], 30);
+  assert.strictEqual(fresh.heroes[0].rage, undefined, 'and starts over next fight');
+});
+
+test('巨门: the first killing blow of a fight is survived, and only the first', () => {
+  const s = E.defaultSave();
+  joinAll(s);
+  wearSet(s, 'zhuo', 'gate');
+  const b = battleFor(s, ['vineMother'], 30);
+  const z = b.heroes[2], foe = b.enemies[0];
+  z.hp = 1;
+  let ev = [];
+  b.strike(foe, z, { power: 50 }, ev);
+  assert.strictEqual(z.alive, true);
+  assert.strictEqual(z.hp, Math.round(z.maxHp * 0.2));
+  assert.ok(ev.some((e) => e.type === 'setfx' && e.text === '不破'));
+  z.hp = 1;
+  ev = [];
+  b.strike(foe, z, { power: 50 }, ev);
+  assert.strictEqual(z.alive, false, 'the second one lands');
+  const other = battleFor(s, ['vineMother'], 30);
+  const o = other.heroes[2];
+  o.hp = 1;
+  o.statuses.burn = 3;
+  other.dot(o, 0.5, 'burn', []);
+  assert.strictEqual(o.alive, true, 'a burn counts as a killing blow too');
+});
+
+test('禄存: road income rises for each hero wearing the full set', () => {
+  const s = E.defaultSave();
+  joinAll(s);
+  const base = Idle.multipliers(s, T0);
+  wearSet(s, 'cen', 'lu');
+  assert.ok(Math.abs(Idle.multipliers(s, T0).coin - base.coin - 0.06) < 1e-9);
+  assert.ok(Math.abs(Idle.multipliers(s, T0).xp - base.xp - 0.06) < 1e-9);
+  wearSet(s, 'ruo', 'lu');
+  assert.ok(Math.abs(Idle.multipliers(s, T0).coin - base.coin - 0.12) < 1e-9, 'it stacks');
+  s.heroes.ruo.joined = false;
+  assert.ok(Math.abs(Idle.multipliers(s, T0).coin - base.coin - 0.06) < 1e-9, 'only the party on the road counts');
+});
+
+test('禄存 pays out in the pack, not just on the label', () => {
+  const plain = E.defaultSave();
+  const rich = E.defaultSave();
+  [plain, rich].forEach((s) => { joinAll(s); Idle.sync(s, T0); });
+  wearSet(rich, 'cen', 'lu');
+  Idle.sync(plain, T0 + HOUR);
+  Idle.sync(rich, T0 + HOUR);
+  assert.ok(Math.abs(rich.idle.pack.coin / plain.idle.pack.coin - 1.06) < 0.001, `${rich.idle.pack.coin} / ${plain.idle.pack.coin}`);
+});
+
+test('文曲: a spell can go off twice for one payment, and never on an empty field', () => {
+  const s = E.defaultSave();
+  joinAll(s);
+  wearSet(s, 'cen', 'wen');
+  const b = battleFor(s, ['vineMother'], 30, () => 0.01);
+  const c = b.heroes[0];
+  const mp = c.mp;
+  const ev = b.perform(c, { kind: 'skill', id: 'cut', target: b.enemies[0] });
+  assert.strictEqual(ev.filter((e) => e.type === 'hit').length, 2, 'two casts');
+  assert.strictEqual(c.mp, mp - G.SKILLS.cut.mp, 'one payment');
+  // The first cast finishes the fight: the echo must not swing at nothing.
+  const d = battleFor(s, ['vine'], 1, () => 0.01);
+  d.enemies[0].hp = 1;
+  const ev2 = d.perform(d.heroes[0], { kind: 'skill', id: 'cut', target: d.enemies[0] });
+  assert.strictEqual(d.outcome, 'win');
+  assert.ok(!ev2.some((e) => e.text === '文心'));
+  // Plain attacks are not spells.
+  const e3 = battleFor(s, ['vineMother'], 30, () => 0.01);
+  const ev3 = e3.perform(e3.heroes[0], { kind: 'attack', target: e3.enemies[0] });
+  assert.strictEqual(ev3.filter((e) => e.type === 'hit').length, 1);
+});
+
+test('文曲: healing echoes too, and a revive is not wasted on a second cast', () => {
+  const s = E.defaultSave();
+  joinAll(s, 30);
+  wearSet(s, 'ruo', 'wen');
+  const b = battleFor(s, ['vineMother'], 30, () => 0.01);
+  const r = b.heroes[1];
+  b.heroes[0].hp = 1;
+  const ev = b.perform(r, { kind: 'skill', id: 'mend', target: b.heroes[0] });
+  assert.strictEqual(ev.filter((e) => e.type === 'heal').length, 2);
+  const c = battleFor(s, ['vineMother'], 30, () => 0.01);
+  c.heroes[0].alive = false;
+  c.heroes[0].hp = 0;
+  const ev2 = c.perform(c.heroes[1], { kind: 'skill', id: 'revive', target: c.heroes[0] });
+  assert.ok(!ev2.some((e) => e.text === '文心'));
+  assert.strictEqual(c.heroes[0].alive, true);
+});
+
+test('廉贞: strikes can break armour, and anyone already suffering takes more', () => {
+  const s = E.defaultSave();
+  joinAll(s);
+  wearSet(s, 'cen', 'lian');
+  const fixed = () => 0.5;
+  const b = battleFor(s, ['vineMother'], 30, fixed);
+  const c = b.heroes[0], foe = b.enemies[0];
+  const clean = b.damage(c, foe, 1, null).amount;
+  foe.statuses.burn = 3;
+  const hurt = b.damage(c, foe, 1, null).amount;
+  assert.ok(Math.abs(hurt / clean - 1.2) < 0.02, `${hurt} vs ${clean}`);
+  delete foe.statuses.burn;
+  foe.statuses.atkUp = 3;
+  assert.strictEqual(b.damage(c, foe, 1, null).amount, clean, 'a buff is not an ailment');
+  delete foe.statuses.atkUp;
+  const d = battleFor(s, ['vineMother'], 30, () => 0.01);
+  d.strike(d.heroes[0], d.enemies[0], { power: 0.01 }, []);
+  assert.ok(d.enemies[0].statuses.weak, 'armour broken');
+});
+
+test('武曲: being struck can strike back, counters never chain, and one can end a fight', () => {
+  const s = E.defaultSave();
+  joinAll(s);
+  wearSet(s, 'zhuo', 'wu');
+  const b = battleFor(s, ['vineMother'], 30, () => 0.01);
+  const z = b.heroes[2], foe = b.enemies[0];
+  const ev = [];
+  b.strike(foe, z, { power: 0.1 }, ev);
+  assert.strictEqual(ev.filter((e) => e.type === 'hit').length, 2, 'one blow, one reply');
+  assert.ok(ev.some((e) => e.text === '镇岳'));
+  // Two heroes who both counter must not bounce blows between enemies and themselves forever.
+  const c = battleFor(s, ['vineMother'], 30, () => 0.99);
+  const ev2 = [];
+  c.strike(c.enemies[0], c.heroes[2], { power: 0.1 }, ev2);
+  assert.strictEqual(ev2.filter((e) => e.type === 'hit').length, 1, 'a failed roll is no reply');
+  // A sweep cut short by a counter that kills the attacker.
+  const k = battleFor(s, ['vine'], 1, () => 0.01);
+  k.enemies[0].hp = 1;
+  const ev3 = [];
+  k.heroes.forEach((h) => k.strike(k.enemies[0], h, { power: 0.1 }, ev3));
+  assert.strictEqual(k.enemies[0].alive, false);
+  assert.strictEqual(k.check(), 'win');
+  assert.ok(ev3.filter((e) => e.type === 'hit').every((e) => e.amount > 0));
+  // Nor does a hero's own hit on an enemy count as being struck.
+  const ally = battleFor(s, ['vineMother'], 30, () => 0.01);
+  const ev4 = [];
+  ally.strike(ally.heroes[2], ally.enemies[0], { power: 0.1 }, ev4);
+  assert.strictEqual(ev4.filter((e) => e.type === 'hit').length, 1);
+});
+
+test('破军: the star gauge starts charged, and critical hits feed it', () => {
+  const s = E.defaultSave();
+  joinAll(s);
+  const plain = battleFor(s, ['vineMother'], 30);
+  assert.strictEqual(plain.ult, 0);
+  wearSet(s, 'cen', 'po');
+  const b = battleFor(s, ['vineMother'], 30, () => 0.01);
+  assert.strictEqual(b.ult, F.SETS.po.four.mods.ultStart);
+  const before = b.ult;
+  b.strike(b.heroes[0], b.enemies[0], { power: 0.1 }, []);
+  assert.strictEqual(b.ult, before + 5 + F.SETS.po.four.mods.ultCrit, 'the usual 5, plus the bonus for a critical');
+  wearSet(s, 'ruo', 'po');
+  wearSet(s, 'zhuo', 'po');
+  const full = battleFor(s, ['vineMother'], 30);
+  assert.ok(full.ult <= 100, 'the gauge never overfills');
+});
+
+test('every fight still ends with every set effect in play at once', () => {
+  F.SET_ORDER.forEach((setId) => {
+    CHAPTERS.forEach((c) => c.nodes.forEach((n) => {
+      if (!n.foes) return;
+      const s = E.defaultSave();
+      joinAll(s, n.lv + 3);
+      ['cen', 'ruo', 'zhuo'].forEach((id) => wearSet(s, id, setId));
+      const b = battleFor(s, n.foes, n.lv, seeded(n.lv * 13));
+      let guard = 0;
+      while (!b.outcome && guard++ < 3000) {
+        const t = b.next();
+        if (t.skip) continue;
+        if (t.actor.side === 'enemy') b.performEnemy(t.actor, b.enemyAction(t.actor));
+        else b.perform(t.actor, b.autoAction(t.actor));
+      }
+      assert.ok(b.outcome, `no outcome in ${n.id} wearing ${setId}`);
+    }));
+  });
+});
+
+// ---- Getting pieces ----
+test('sets open one by one as the stars are lit', () => {
+  const s = E.defaultSave();
+  assert.deepStrictEqual(Gear.openSets(s), ['wolf']);
+  s.progress.stars = 2;
+  assert.deepStrictEqual(Gear.openSets(s), ['wolf', 'gate', 'lu']);
+  s.progress.stars = 6;
+  assert.strictEqual(Gear.openSets(s).length, 7, 'finishing the story opens the last set, whichever ending was chosen');
+});
+
+test('the road brings gear and iron only once equipment has opened, and they wait in the pack', () => {
+  const s = E.defaultSave();
+  Idle.sync(s, T0);
+  Idle.sync(s, T0 + 9 * HOUR);
+  assert.strictEqual(s.idle.pack.iron || 0, 0, 'the first session stays simple');
+  assert.strictEqual((s.idle.pack.gear || []).length, 0);
+  const t = E.defaultSave();
+  clearUpTo(t, 'c1b');
+  t.gear.bag = [];
+  t.gear.fresh = 0;
+  Idle.sync(t, T0);
+  Idle.sync(t, T0 + 10 * HOUR, seededRng(5));
+  assert.ok(t.idle.pack.iron > 15 && t.idle.pack.iron <= 21, `iron ${t.idle.pack.iron}`);
+  assert.ok(t.idle.pack.gear.length >= 1, 'found something');
+  assert.strictEqual(t.gear.bag.length, 0, 'nothing is added until the pack is collected');
+  assert.strictEqual(Idle.packEmpty(t), false);
+  const n = t.idle.pack.gear.length;
+  const iron = Math.floor(t.idle.pack.iron);
+  const got = Idle.collect(t);
+  assert.strictEqual(t.gear.bag.length, n);
+  assert.strictEqual(got.gear.length, n);
+  assert.strictEqual(t.gear.iron, iron);
+  assert.strictEqual(Idle.collect(t).gear.length, 0, 'and only once');
+  assert.ok(t.gear.fresh >= n, 'and the tab shows a marker');
+});
+
+test('old-format packs without the new fields still collect', () => {
+  const s = E.defaultSave();
+  s.idle.pack = { coin: 100, xp: 0, dust: 0, items: {}, spirits: {}, herbs: {} };
+  assert.strictEqual(Idle.packEmpty(s), false);
+  const got = Idle.collect(s);
+  assert.deepStrictEqual(got.gear, []);
+  assert.strictEqual(got.iron, 0);
+  assert.strictEqual(Idle.packEmpty(s), true);
+});
+
+test('a boss hands over a piece of the set its star opens, the first time only', () => {
+  const s = E.defaultSave();
+  joinAll(s);
+  clearUpTo(s, 'c1g');
+  const before = s.gear.bag.length;
+  const foes = [P.enemyUnit('vineMother', 6, 0)];
+  const r = E.battleRewards(s, foes, 'c1h');
+  assert.ok(r.gear, 'a piece was handed over');
+  assert.strictEqual(r.gear.set, 'gate');
+  assert.strictEqual(s.gear.bag.length, before + 1);
+  E.clearNode(s, 'c1h');
+  const again = E.battleRewards(s, foes, 'c1h');
+  assert.strictEqual(again.gear, null);
+  assert.strictEqual(E.battleRewards(s, [P.enemyUnit('vine', 2, 0)], 'c1a').gear, null, 'plain fights do not');
+  assert.strictEqual(E.battleRewards(s, foes).gear, null, 'nor fights off the road');
+});
+
+test('reaching the first companion hands over a starter pair, worn and with a set bonus', () => {
+  const s = E.defaultSave();
+  clearUpTo(s, 'c1a');
+  assert.strictEqual(s.gear.bag.length, 0);
+  clearUpTo(s, 'c1b');
+  assert.strictEqual(s.gear.bag.length, 2);
+  assert.strictEqual(Gear.mods(s, 'cen').atkPct > F.SETS.wolf.two.value, true);
+  E.grantMilestones(s);
+  assert.strictEqual(s.gear.bag.length, 2, 'it only happens once');
+});
+
+test('forging makes a chosen piece of any open set, and refuses a closed one', () => {
+  const s = E.defaultSave();
+  s.coin = F.FORGE.coin * 3;
+  s.gear.iron = F.FORGE.iron * 3;
+  assert.strictEqual(Gear.forge(s, 'gate', 'coat'), null, 'closed');
+  assert.strictEqual(s.coin, F.FORGE.coin * 3, 'and it cost nothing');
+  const p = Gear.forge(s, 'wolf', 'coat');
+  assert.strictEqual(p.set, 'wolf');
+  assert.strictEqual(p.slot, 'coat');
+  assert.strictEqual(p.rar, 0);
+  assert.strictEqual(s.coin, F.FORGE.coin * 2);
+  assert.strictEqual(s.gear.iron, F.FORGE.iron * 2);
+  s.coin = 0;
+  assert.strictEqual(Gear.forge(s, 'wolf', 'boots'), null, 'cannot pay');
+  assert.strictEqual(s.gear.iron, F.FORGE.iron * 2);
+});
+
+test('any set can be completed with no draws, no Stardust and no luck', () => {
+  const s = E.defaultSave();
+  s.progress.stars = 6;
+  s.coin = F.FORGE.coin * 4 * F.SET_ORDER.length;
+  s.gear.iron = F.FORGE.iron * 4 * F.SET_ORDER.length;
+  F.SET_ORDER.forEach((id) => {
+    F.SLOT_ORDER.forEach((slot) => {
+      const p = Gear.forge(s, id, slot);
+      assert.ok(p, `${id} ${slot}`);
+      Gear.equip(s, 'cen', p.uid);
+    });
+    assert.strictEqual(Gear.setCounts(s, 'cen')[id], 4);
+  });
+  assert.strictEqual(s.stardust, 0);
+  assert.strictEqual(s.gacha.total, 0);
+});
+
+// ---- Breaking down ----
+test('breaking down pays iron, gives back part of the upgrades, and spares anything worn', () => {
+  const s = E.defaultSave();
+  const p = Gear.add(s, { set: 'wolf', slot: 'blade', rar: 2 });
+  Gear.equip(s, 'cen', p.uid);
+  assert.strictEqual(Gear.salvage(s, p.uid), null, 'worn pieces are safe');
+  assert.ok(Gear.find(s, p.uid));
+  Gear.unequip(s, 'cen', 'blade');
+  const v = Gear.salvage(s, p.uid);
+  assert.strictEqual(v.iron, F.RARITIES[2].salvage);
+  assert.strictEqual(s.gear.iron, F.RARITIES[2].salvage);
+  assert.strictEqual(Gear.find(s, p.uid), null);
+  assert.strictEqual(Gear.salvage(s, p.uid), null, 'it cannot pay twice');
+  const q = Gear.add(s, { set: 'wolf', slot: 'blade', rar: 0 });
+  s.coin = 1e6;
+  s.gear.iron = 1000;
+  Gear.levelUp(s, q.uid);
+  Gear.levelUp(s, q.uid);
+  const spent = F.levelCost(0).coin + F.levelCost(1).coin;
+  const r = Gear.salvageValue(Gear.find(s, q.uid));
+  assert.ok(r.coin > 0 && r.coin < spent, 'part of the coins come back, never more than was paid');
+});
+
+test('one-tap breakdown never touches anything worn, rare, or the best copy of a piece', () => {
+  const s = E.defaultSave();
+  const make = (set, slot, rar) => Gear.add(s, { set, slot, rar }).uid;
+  const worn = make('wolf', 'blade', 0);
+  Gear.equip(s, 'cen', worn);
+  const bestSpare = make('wolf', 'blade', 1);
+  const lesser = make('wolf', 'blade', 0);
+  const rareA = make('wolf', 'coat', 3);
+  const rareB = make('wolf', 'coat', 2);
+  const only = make('wolf', 'boots', 0);
+  const uids = Gear.spares(s).map((p) => p.uid);
+  assert.deepStrictEqual(uids, [lesser]);
+  const r = Gear.salvageSpares(s);
+  assert.strictEqual(r.n, 1);
+  [worn, bestSpare, rareA, rareB, only].forEach((u) => assert.ok(Gear.find(s, u), u));
+  assert.strictEqual(Gear.find(s, lesser), null);
+  assert.strictEqual(Gear.salvageSpares(s).n, 0, 'nothing is left to offer');
+});
+
+test('a full bag makes room from the weakest piece nobody wears, and pays for it', () => {
+  const s = E.defaultSave();
+  const worn = Gear.add(s, { set: 'wolf', slot: 'blade', rar: 0 });
+  Gear.equip(s, 'cen', worn.uid);
+  for (let i = 0; i < F.BAG_CAP - 2; i++) Gear.add(s, { set: 'wolf', slot: 'coat', rar: 2 });
+  const weak = Gear.add(s, { set: 'wolf', slot: 'boots', rar: 1 });
+  assert.strictEqual(s.gear.bag.length, F.BAG_CAP);
+  const iron = s.gear.iron;
+  const fresh = Gear.add(s, { set: 'wolf', slot: 'charm', rar: 3 });
+  assert.strictEqual(s.gear.bag.length, F.BAG_CAP, 'the bag never grows past its limit');
+  assert.ok(Gear.find(s, fresh.uid), 'the new piece is kept');
+  assert.ok(Gear.find(s, worn.uid), 'the worn one is safe, though it is the weakest of all');
+  assert.strictEqual(Gear.find(s, weak.uid), null);
+  assert.strictEqual(s.gear.iron, iron + F.RARITIES[1].salvage);
+});
+
+// ---- One-tap helpers ----
+test('one-tap equip dresses everyone who has joined, and never shares a piece', () => {
+  const s = E.defaultSave();
+  s.heroes.ruo.joined = true;
+  s.progress.stars = 3;
+  const rng = seededRng(3);
+  for (let i = 0; i < 40; i++) Gear.add(s, Gear.rollDrop(s, rng));
+  assert.strictEqual(Gear.autoEquip(s), true);
+  const all = [];
+  ['cen', 'ruo'].forEach((id) => {
+    F.SLOT_ORDER.forEach((k) => { if (s.heroes[id].gear[k]) all.push(s.heroes[id].gear[k]); });
+  });
+  assert.ok(all.length >= 6);
+  assert.strictEqual(new Set(all).size, all.length, 'a piece on two heroes');
+  all.forEach((u) => assert.ok(Gear.find(s, u), u));
+  F.SLOT_ORDER.forEach((k) => assert.strictEqual(s.heroes.zhuo.gear[k], null, 'nobody dresses before joining'));
+  assert.strictEqual(Gear.autoEquip(s), false, 'a second tap changes nothing');
+});
+
+test('one-tap equip picks a pre-made full set over slightly better loose pieces', () => {
+  const s = E.defaultSave();
+  F.SLOT_ORDER.forEach((slot) => Gear.add(s, { set: 'wolf', slot, rar: 0 }));
+  s.progress.stars = 1;
+  Gear.add(s, { set: 'gate', slot: 'blade', rar: 0 });
+  Gear.autoEquip(s);
+  assert.strictEqual(Gear.setCounts(s, 'cen').wolf, 4);
+});
+
+test('one-tap upgrade stays inside its budget and spends only what is there', () => {
+  const s = E.defaultSave();
+  const p = Gear.add(s, { set: 'wolf', slot: 'blade', rar: 0 });
+  Gear.equip(s, 'cen', p.uid);
+  Gear.add(s, { set: 'wolf', slot: 'coat', rar: 0 });
+  s.coin = 1e6;
+  s.gear.iron = 1e3;
+  const r = Gear.autoUpgrade(s, 2000);
+  assert.ok(r.n > 0);
+  assert.ok(r.spent <= 2000);
+  assert.strictEqual(s.coin, 1e6 - r.spent);
+  const t = E.defaultSave();
+  const q = Gear.add(t, { set: 'wolf', slot: 'blade', rar: 0 });
+  Gear.equip(t, 'cen', q.uid);
+  t.coin = 500;
+  t.gear.iron = 0;
+  assert.strictEqual(Gear.autoUpgrade(t).n, 0, 'no iron, no upgrade');
+  assert.strictEqual(t.coin, 500);
+  assert.strictEqual(s.gear.bag.find((x) => x.slot === 'coat').lv, 0, 'unworn pieces are left alone');
+});
+
+test('one-tap upgrade promotes when a piece reaches its cap', () => {
+  const s = E.defaultSave();
+  const p = Gear.add(s, { set: 'wolf', slot: 'blade', rar: 0 });
+  Gear.equip(s, 'cen', p.uid);
+  s.coin = 1e12;
+  s.gear.iron = 1e6;
+  Gear.autoUpgrade(s);
+  const top = F.RARITIES.length - 1;
+  assert.strictEqual(Gear.find(s, p.uid).rar, top);
+  assert.strictEqual(Gear.find(s, p.uid).lv, F.RARITIES[top].cap);
+  assert.strictEqual(s.gear.seen.wolf_blade, top, 'and the record of the best seen keeps up');
+});
+
+// ---- Saves ----
+test('saves from before equipment gain it, and collect what they have already earned', () => {
+  const old = E.defaultSave();
+  delete old.gear;
+  delete old.gacha;
+  ['cen', 'ruo', 'zhuo'].forEach((id) => { delete old.heroes[id].gear; });
+  old.idle.pack = { coin: 5, xp: 0, dust: 0, items: {}, spirits: {}, herbs: {} };
+  delete old.idle.carry.gear;
+  clearUpToRaw(old, 'c2h');
+  const s = E.upgrade(JSON.parse(JSON.stringify(old)));
+  assert.strictEqual(s.gacha.tickets, F.STAR_TICKETS(1) + F.STAR_TICKETS(2), 'a letter gift for each star already lit');
+  assert.strictEqual(s.gear.bag.length, 2, 'and the starter pair');
+  assert.ok(s.heroes.cen.gear.blade);
+  assert.strictEqual(s.idle.pack.coin, 5, 'nothing else moved');
+  const twice = E.upgrade(JSON.parse(JSON.stringify(s)));
+  assert.strictEqual(twice.gacha.tickets, s.gacha.tickets, 'loading again gives nothing more');
+  assert.strictEqual(twice.gear.bag.length, 2);
+});
+
+test('gifts for lit stars pay once each, however they are reached', () => {
+  const s = E.defaultSave();
+  assert.strictEqual(s.gacha.tickets, 0);
+  clearUpTo(s, 'c1h');
+  assert.strictEqual(s.gacha.tickets, F.STAR_TICKETS(1));
+  E.clearNode(s, 'c1h');
+  assert.strictEqual(s.gacha.tickets, F.STAR_TICKETS(1), 'replaying a boss pays no second gift');
+  clearUpTo(s, 'c2h');
+  assert.strictEqual(s.gacha.tickets, F.STAR_TICKETS(1) + F.STAR_TICKETS(2));
+});
+
+// ---- The draw ----
+function drawSave(tickets, stars) {
+  const s = E.defaultSave();
+  s.progress.stars = stars === undefined ? 6 : stars;
+  s.gacha.tickets = tickets;
+  return s;
+}
+
+test('a draw spends letters and adds pieces, and is refused without enough letters', () => {
+  const s = drawSave(3);
+  assert.strictEqual(Gacha.draw(s, 10), null);
+  assert.strictEqual(s.gacha.tickets, 3, 'nothing was taken');
+  const r = Gacha.draw(s, 1, seededRng(1));
+  assert.strictEqual(r.length, 1);
+  assert.strictEqual(s.gacha.tickets, 2);
+  assert.strictEqual(s.gear.bag.length, 1);
+  assert.ok(Gear.find(s, r[0].uid));
+  assert.strictEqual(r[0].lv, 0);
+  assert.strictEqual(s.gacha.total, 1);
+});
+
+test('the published odds are what actually happens', () => {
+  const N = 200000;
+  const s = drawSave(N);
+  s.gear.bag = [];
+  const counts = [0, 0, 0, 0];
+  const rng = seededRng(99);
+  // Draws in small batches and clears the bag, so this measures the odds and not the bag limit.
+  for (let i = 0; i < N; i += 100) {
+    Gacha.draw(s, 100, rng).forEach((p) => counts[p.rar]++);
+    s.gear.bag = [];
+  }
+  const real = Gacha.effectiveRates();
+  F.RARITIES.forEach((r, i) => {
+    const seen = counts[i] / N;
+    assert.ok(Math.abs(seen - real[i]) < 0.002, `${r.name}: told ${real[i]}, saw ${seen}`);
+  });
+  assert.ok(Math.abs(real.reduce((a, b) => a + b, 0) - 1) < 1e-9, 'the rates on screen add up to 100%');
+});
+
+test('guarantees: bad luck has a hard limit, and it is exactly what the screen says', () => {
+  const s = drawSave(F.PITY_TOP * 5);
+  const worst = () => 0.999; // Always the lowest rarity on the table.
+  let sinceTop = 0, sinceRare = 0, tops = 0;
+  for (let i = 0; i < F.PITY_TOP * 5; i++) {
+    const [p] = Gacha.draw(s, 1, worst);
+    sinceTop++;
+    sinceRare++;
+    if (p.rar === 3) { assert.strictEqual(sinceTop, F.PITY_TOP); sinceTop = 0; tops++; }
+    if (p.rar >= 2) { assert.ok(sinceRare <= F.PITY_RARE, `${sinceRare} without a rare`); sinceRare = 0; }
+    s.gear.bag = [];
+  }
+  assert.strictEqual(tops, 5);
+});
+
+test('every ten letters hold a rare piece, even on the worst luck', () => {
+  const s = drawSave(10);
+  const r = Gacha.draw(s, 10, () => 0.999);
+  assert.ok(r.some((p) => p.rar >= 2));
+});
+
+test('a lucky top piece resets its guarantee', () => {
+  const s = drawSave(2);
+  s.gacha.sinceTop = 40;
+  s.gacha.sinceRare = 7;
+  Gacha.draw(s, 1, () => 0);
+  assert.strictEqual(s.gacha.sinceTop, 0);
+  assert.strictEqual(s.gacha.sinceRare, 0);
+});
+
+test('only open sets can come out, however lucky the draw', () => {
+  const s = drawSave(600, 1);
+  const seen = new Set();
+  const rng = seededRng(7);
+  for (let i = 0; i < 600; i += 10) {
+    Gacha.draw(s, 10, rng).forEach((p) => seen.add(p.set));
+    s.gear.bag = [];
+  }
+  assert.deepStrictEqual(Array.from(seen).sort(), ['gate', 'wolf']);
+});
+
+test('a wish steers half of the rare pieces, and no common ones', () => {
+  const s = drawSave(30000);
+  assert.strictEqual(Gacha.setWish(s, 'wu'), true);
+  const rng = seededRng(8);
+  let rare = 0, wished = 0, common = 0, commonWished = 0;
+  for (let i = 0; i < 30000; i += 100) {
+    Gacha.draw(s, 100, rng).forEach((p) => {
+      if (p.rar >= 2) {
+        rare++;
+        if (p.set === 'wu') wished++;
+      } else {
+        common++;
+        if (p.set === 'wu') commonWished++;
+      }
+    });
+    s.gear.bag = [];
+  }
+  // Half by wish, plus the other half's fair chance of landing on it anyway.
+  const expected = F.WISH_SHARE + (1 - F.WISH_SHARE) / 7;
+  assert.ok(Math.abs(wished / rare - expected) < 0.03, `${wished / rare} vs ${expected}`);
+  assert.ok(Math.abs(commonWished / common - 1 / 7) < 0.02, `${commonWished / common}`);
+});
+
+test('a wish can only name an open set', () => {
+  const s = drawSave(0, 0);
+  assert.strictEqual(Gacha.setWish(s, 'po'), false);
+  assert.strictEqual(s.gacha.wish, null);
+  assert.strictEqual(Gacha.setWish(s, 'wolf'), true);
+  assert.strictEqual(Gacha.setWish(s, null), true);
+  assert.strictEqual(s.gacha.wish, null);
+});
+
+test('buying letters is capped per day, charges fairly and resets the next day', () => {
+  const s = drawSave(0);
+  s.coin = 1e9;
+  s.stardust = 1e6;
+  const day = 500;
+  const price = Gacha.ticketCoinCost(s);
+  for (let i = 0; i < F.TICKET_COIN_DAILY; i++) assert.ok(Gacha.buyWithCoin(s, day));
+  assert.strictEqual(Gacha.buyWithCoin(s, day), false, 'coin limit');
+  for (let i = 0; i < F.TICKET_DUST_DAILY; i++) assert.ok(Gacha.buyWithDust(s, day));
+  assert.strictEqual(Gacha.buyWithDust(s, day), false, 'Stardust limit');
+  assert.strictEqual(s.gacha.tickets, F.TICKET_COIN_DAILY + F.TICKET_DUST_DAILY);
+  assert.strictEqual(s.coin, 1e9 - price * F.TICKET_COIN_DAILY);
+  assert.strictEqual(s.stardust, 1e6 - F.TICKET_DUST * F.TICKET_DUST_DAILY);
+  assert.ok(Gacha.buyWithCoin(s, day + 1), 'the next day');
+  assert.ok(Gacha.buyWithDust(s, day + 1));
+  const poor = drawSave(0);
+  assert.strictEqual(Gacha.buyWithCoin(poor, day), false);
+  assert.strictEqual(Gacha.buyWithDust(poor, day), false);
+  assert.strictEqual(poor.gacha.tickets, 0);
+  assert.strictEqual(poor.gacha.boughtCoin, 0, 'a refused purchase does not use up the allowance');
+});
+
+test('the coin price of a letter follows road income, so it stays meaningful', () => {
+  const early = E.defaultSave();
+  const late = E.defaultSave();
+  clearUpTo(late, 'c5h');
+  assert.ok(Gacha.ticketCoinCost(late) > Gacha.ticketCoinCost(early));
+  assert.ok(Gacha.ticketCoinCost(late) > 0);
+});
+
+test('letters come from playing: daily bonus, the sky stair, wandering and the road', () => {
+  const s = E.defaultSave();
+  const day = 100;
+  ['collect', 'train', 'dispatch', 'garden'].forEach((id) => { Daily.mark(s, id, day); Daily.claim(s, id, day); });
+  Daily.claimBonus(s, day);
+  assert.strictEqual(s.gacha.tickets, W.DAILY_BONUS.tickets);
+  assert.strictEqual(s.steps.total, 0, 'with no real steps');
+
+  const t = E.defaultSave();
+  for (let f = 1; f <= 10; f++) Tower.win(t, f);
+  assert.strictEqual(t.gacha.tickets, 1 + 3, 'floor 5 and floor 10');
+  assert.strictEqual(Tower.reward(3).tickets, 0);
+  Tower.win(t, 5);
+  assert.strictEqual(t.gacha.tickets, 4, 'a floor pays only the first time');
+
+  const w = E.defaultSave();
+  w.wander.pos = W.BOARD.length - 1;
+  w.wander.rolls = 1;
+  w.wander.regen = T0 + HOUR;
+  Wander.roll(w, T0, () => 0.1);
+  assert.strictEqual(w.gacha.tickets, Wander.LAP_TICKETS, 'going all the way round');
+
+  const r = E.defaultSave();
+  clearUpTo(r, 'c1h');
+  const gift = r.gacha.tickets;
+  Idle.sync(r, T0);
+  r.idle.secs = 0;
+  r.blessings.pack = 10;
+  for (let h = 1; h <= 24; h++) Idle.sync(r, T0 + h * HOUR);
+  const got = Idle.collect(r);
+  assert.ok(got.tickets >= 1, 'a slow trickle on the road');
+  assert.strictEqual(r.gacha.tickets, gift + got.tickets);
+});
+
+test('speed boosts do not hurry the letters along', () => {
+  const plain = E.defaultSave();
+  const fast = E.defaultSave();
+  [plain, fast].forEach((s) => { clearUpTo(s, 'c1h'); Idle.sync(s, T0); });
+  fast.idle.hasteSecs = 10 * HOUR / 1000;
+  Idle.sync(plain, T0 + 5 * HOUR);
+  Idle.sync(fast, T0 + 5 * HOUR);
+  assert.ok(fast.idle.pack.coin > plain.idle.pack.coin * 1.5);
+  assert.ok(Math.abs(fast.idle.pack.tickets - plain.idle.pack.tickets) < 1e-9);
+});
+
+// ---- The rule the whole design rests on, applied to the new systems ----
+test('equipment and the draw never read real steps', () => {
+  ['js/systems/gear.js', 'js/systems/gacha.js', 'js/data/gear.js'].forEach((f) => {
+    assert.ok(!/steps/.test(fs.readFileSync(path.join(ROOT, f), 'utf8')), `${f} mentions steps`);
+  });
+});
+
+test('balance: gear helps, drawing helps a little, and neither is needed to finish', () => {
+  const { run, PROFILES } = require('./simulate.js');
+  const RUNS = 8;
+  const avg = (p) => {
+    let t = 0;
+    for (let i = 1; i <= RUNS; i++) {
+      const r = run(4321 * i, PROFILES[p]);
+      assert.ok(r.finished, `${p} did not finish`);
+      t += r.days;
+    }
+    return t / RUNS;
+  };
+  const draws = avg('noneActive');
+  const never = avg('noDraw');
+  const ignores = avg('noGear');
+  assert.ok(draws <= 25, `the published pace has drifted: ${draws} days`);
+  assert.ok(never / draws <= 1.3, `never drawing must stay close to drawing: ${never} vs ${draws}`);
+  assert.ok(ignores > never, `equipment should be worth using: ${ignores} vs ${never}`);
+  assert.ok(ignores <= 45, `ignoring equipment should still finish in reasonable time, took ${ignores} days`);
+  // Walking buys speed. Spending that Stardust on letters must not beat spending it on speed.
+  const speed = avg('typical');
+  const letters = avg('walkDraw');
+  assert.ok(letters >= speed, `letters should not outrun speed boosts: ${letters} vs ${speed}`);
+});
+
+test('the save stays small even with a full bag of equipment', () => {
+  const s = E.defaultSave();
+  s.progress.stars = 6;
+  const rng = seededRng(2);
+  for (let i = 0; i < F.BAG_CAP * 2; i++) Gear.add(s, Gear.rollDrop(s, rng));
+  assert.strictEqual(s.gear.bag.length, F.BAG_CAP);
+  const size = JSON.stringify(s.gear).length;
+  assert.ok(size < 10 * 1024, `equipment takes ${size} bytes`);
 });
 
 // ---- Combat ----

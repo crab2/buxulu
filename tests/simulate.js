@@ -13,6 +13,9 @@ const Garden = require('../js/systems/garden.js');
 const Tower = require('../js/systems/tower.js');
 const Wander = require('../js/systems/wander.js');
 const Daily = require('../js/systems/daily.js');
+const Gear = require('../js/systems/gear.js');
+const Gacha = require('../js/systems/gacha.js');
+const F = require('../js/data/gear.js');
 const L = require('../js/systems/ledger.js');
 const { CHAPTERS, FLAT } = require('../js/data/chapters.js');
 
@@ -57,6 +60,37 @@ function refineWhatYouCan(s, now) {
     if (!E.startRefine(s, a, b, now)) break;
   }
   equipBest(s);
+}
+
+// The set each hero builds around, once it has opened. Forging fills any gap, so no one waits on luck.
+const WANTS = { cen: ['wolf', 'lian'], ruo: ['gate', 'wen'], zhuo: ['gate', 'wu'] };
+function forgeMissing(s) {
+  const open = Gear.openSets(s);
+  P.joined(s).forEach((id) => {
+    const set = WANTS[id].filter((k) => open.indexOf(k) >= 0).pop();
+    if (!set) return;
+    F.SLOT_ORDER.forEach((slot) => {
+      const have = s.gear.bag.some((p) => p.set === set && p.slot === slot);
+      if (!have && s.gear.iron >= F.FORGE.iron * 2 && s.coin >= F.FORGE.coin * 2) Gear.forge(s, set, slot);
+    });
+  });
+}
+
+// Draws what there is, keeps what fits, and puts part of the coins into upgrades.
+function tendGear(s, o, day) {
+  if (o.noGear) {
+    // Ignores equipment altogether, even the two pieces the story hands over.
+    P.joined(s).forEach((id) => F.SLOT_ORDER.forEach((k) => Gear.unequip(s, id, k)));
+    return;
+  }
+  if (!o.noDraw && E.unlocked(s, 'gacha')) {
+    for (let i = 0; i < (o.buyCoin || 0); i++) Gacha.buyWithCoin(s, day);
+    Gacha.draw(s, s.gacha.tickets);
+  }
+  forgeMissing(s);
+  Gear.salvageSpares(s);
+  Gear.autoEquip(s);
+  if (Gear.autoUpgrade(s, s.coin * (o.gearShare === undefined ? 0.5 : o.gearShare)).n) Daily.mark(s, 'gear', day);
 }
 
 // Gets the supplies working: garden, errands, a meal and the dice.
@@ -111,8 +145,11 @@ function claimDailies(s, day) {
 }
 
 // How a walker spends the day's Stardust: mostly on speed, with a share saved for permanent upgrades.
-function spendDust(s, now, rng) {
+function spendDust(s, now, rng, o, day) {
   const order = ['fortune', 'stride', 'pack'];
+  for (let i = 0; i < ((o && o.buyDust) || 0); i++) {
+    if (E.unlocked(s, 'gacha') && s.stardust >= F.TICKET_DUST * 2) Gacha.buyWithDust(s, day);
+  }
   for (let guard = 0; guard < 40; guard++) {
     const blessing = order.find((id) => s.blessings[id] < 10 && s.stardust >= Boosts.blessingCost(id, s.blessings[id]) * 1.5);
     if (blessing) { Boosts.buyBlessing(s, blessing); continue; }
@@ -127,6 +164,10 @@ function spendDust(s, now, rng) {
  * o.checkins  hours of the day the player opens the game
  * o.active    does the player use the side activities, or only collect and train?
  * o.keen      does the player also climb the tower by hand?
+ * o.noGear    ignores equipment completely
+ * o.noDraw    uses equipment from the road and the forge, but never opens a star letter
+ * o.buyDust   star letters bought with Stardust per day
+ * o.buyCoin   star letters bought with coins per day
  */
 function run(seed, o) {
   const rng = mulberry(seed);
@@ -163,14 +204,16 @@ function run(seed, o) {
       }
       Idle.collect(s);
       Daily.mark(s, 'collect', day);
-      // Relics first: a share of the coins goes to the furnace, then the rest to training.
+      // Equipment and relics first: a share of the coins goes there, then the rest to training.
+      tendGear(s, o, day);
       refineWhatYouCan(s, now);
       E.autoTrain(s);
       Daily.mark(s, 'train', day);
       if (o.active) doActivities(s, now, rng, day, o.keen);
       claimDailies(s, day);
-      spendDust(s, now, rng);
+      spendDust(s, now, rng, o, day);
       Idle.collect(s);
+      tendGear(s, o, day);
       E.autoTrain(s);
       // Fights the party stopped for, played on auto, a few tries per visit.
       for (let guard = 0; guard < 12; guard++) {
@@ -223,7 +266,25 @@ const PROFILES = {
   typical: { label: 'typical walker 7,000/day, plays the activities', steps: 7000, active: true, keen: true },
   keen: { label: 'keen walker 12,000/day, plays the activities', steps: 12000, active: true, keen: true },
   ultra: { label: 'very keen walker 20,000/day, plays the activities', steps: 20000, active: true, keen: true },
+  // How the equipment and the draw change things, against the no-WeRun player above.
+  noGear: { label: 'no WeRun, plays the activities, ignores equipment', steps: 0, active: true, keen: true, noGear: true },
+  noDraw: { label: 'no WeRun, plays the activities, never opens a star letter', steps: 0, active: true, keen: true, noDraw: true },
+  walkDraw: { label: 'typical walker 7,000/day, spends Stardust on star letters', steps: 7000, active: true, keen: true, buyDust: 5 },
+  maxDraw: { label: 'very keen walker 20,000/day, buys every star letter allowed', steps: 20000, active: true, keen: true, buyDust: F.TICKET_DUST_DAILY, buyCoin: F.TICKET_COIN_DAILY },
 };
+
+// A short description of what a run ended up wearing.
+function gearReport(s) {
+  const worn = [];
+  P.joined(s).forEach((id) => worn.push(...Gear.worn(s, id)));
+  const avg = (f) => (worn.length ? worn.reduce((a, p) => a + f(p), 0) / worn.length : 0);
+  let four = 0;
+  P.joined(s).forEach((id) => {
+    const n = Gear.setCounts(s, id);
+    if (Object.keys(n).some((k) => n[k] >= 4)) four++;
+  });
+  return { rar: avg((p) => p.rar), lv: avg((p) => p.lv), four, draws: s.gacha.total, iron: s.gear.iron, bag: s.gear.bag.length, tickets: s.gacha.tickets };
+}
 
 if (require.main === module) {
   Object.keys(PROFILES).forEach((k) => {
@@ -237,7 +298,10 @@ if (require.main === module) {
       console.log(`  ${c.name.padEnd(5, '　')} boss Lv${String(boss.lv).padEnd(3)} party Lv${String(avg((r) => r.report[i].lv)).padEnd(5)} attack tier ${String(avg((r) => r.report[i].train)).padEnd(5)} power ${String(avg((r) => r.report[i].power)).padEnd(7)} done day ${avg((r) => r.report[i].day)}`);
     });
     console.log(`  tower floor ${avg((r) => r.s.tower.best)}, blessings ${avg((r) => r.s.blessings.fortune + r.s.blessings.stride + r.s.blessings.pack)}, relics ${avg((r) => r.s.relics.length)}, letters ${avg((r) => r.s.letters.got.length)}`);
+    const g = runs.map((r) => gearReport(r.s));
+    const ag = (k) => Math.round((g.reduce((a, x) => a + x[k], 0) / g.length) * 10) / 10;
+    console.log(`  worn: rarity ${ag('rar')}, level ${ag('lv')}, full sets ${ag('four')}/3 · star letters opened ${ag('draws')}, bag ${ag('bag')}, iron left ${ag('iron')}`);
   });
 }
 
-module.exports = { run, PROFILES };
+module.exports = { run, PROFILES, gearReport };

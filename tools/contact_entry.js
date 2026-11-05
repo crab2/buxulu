@@ -2,7 +2,8 @@ const { heroGrid, PORTRAITS } = require('../js/art/heroes.js');
 const { DRAW, monsterGrid } = require('../js/art/monsters.js');
 const { battleBg, mapBg } = require('../js/art/scenery.js');
 const { hubScene } = require('../js/art/station.js');
-const { ICONS } = require('../js/art/icons.js');
+const { ICONS, gearIcon, cardFront, cardBack, letterBig } = require('../js/art/icons.js');
+const F = require('../js/data/gear.js');
 
 const out = window.document.getElementById('out');
 function show(grid, scale, label) {
@@ -19,6 +20,13 @@ if (which === 'all' || which === 'heroes') {
   ['cen', 'ruo', 'zhuo'].forEach((id) => ['idle0', 'walk0', 'walk1', 'walk2', 'walk3', 'walk4', 'walk5', 'windup', 'atk', 'thrust', 'cast', 'hurt', 'ko'].forEach((p) => show(heroGrid(id, p), 2, id + ' ' + p)));
   Object.keys(PORTRAITS).forEach((k) => show(PORTRAITS[k](), 4, k));
   Object.keys(ICONS).forEach((k) => show(ICONS[k](), 3, k));
+}
+if (which === 'all' || which === 'gear') {
+  F.SET_ORDER.forEach((id) => F.SLOT_ORDER.forEach((slot, i) => show(gearIcon(slot, F.SETS[id], i), 4, F.SETS[id].name + slot)));
+  [0, 1, 2, 3].forEach((r) => show(cardFront(r), 3, 'card ' + r));
+  show(cardBack(), 3, 'back');
+  show(letterBig(), 3, 'letter');
+  ['gear', 'iron', 'letter'].forEach((k) => show(ICONS[k](), 4, k));
 }
 if (which === 'all' || which === 'monsters') {
   Object.keys(DRAW).filter((k) => DRAW[k]({}).w < 70).forEach((k) => show(monsterGrid(k), 3, k));

@@ -147,8 +147,9 @@ const DAILY_TASKS = [
   { id: 'garden', name: '收获一次药圃', dust: 25 },
   { id: 'wander', name: '云游一次', dust: 25 },
   { id: 'tower', name: '登一次天阶', dust: 25 },
+  { id: 'gear', name: '强化一次行装', dust: 25 },
 ];
-const DAILY_BONUS = { need: 4, dust: 100 };
+const DAILY_BONUS = { need: 4, dust: 100, tickets: 3 };
 const DAILY_WALK = { steps: 3000, dust: 50 };
 
 // ---- Wardrobe ----
@@ -178,6 +179,8 @@ const UNLOCKS = {
   garden: { node: 'c1h', name: '药圃' },
   tower: { node: 'c1h', name: '天阶' },
   wander: { node: 'c2b', name: '云游' },
+  gear: { node: 'c1b', name: '行装' },
+  gacha: { node: 'c1h', name: '星笺' },
 };
 
 module.exports = {

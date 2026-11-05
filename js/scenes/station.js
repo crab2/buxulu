@@ -106,6 +106,9 @@ class Station {
     this.fx.draw();
     ui.header('望星驿', null, s.stardust, s.coin);
 
+    // A star letter drifts over the station once the sky has started writing.
+    const lx = Math.round(W * 0.2), ly = D.contentTop + 22;
+    if (E.unlocked(s, 'gacha')) ui.img(art.icon('letter'), lx - 8, ly + Math.round(Math.sin(game.t * 1.5) * 2));
     const locked = (f) => !E.unlocked(s, f);
     const lockNote = (f) => () => {
       const u = W_.UNLOCKS[f];
@@ -126,6 +129,9 @@ class Station {
       locked: locked('garden'), badge: !locked('garden') && Garden.ripeCount(s, now) > 0, onTap: open('garden', 'garden'),
     });
     this.plaque('st-shop', '驿铺', sh.x, sh.y - 58, [sh.x - 30, sh.y - 58, 60, 60], { locked: locked('shop'), onTap: open('shop', 'shop') });
+    if (E.unlocked(s, 'gacha')) {
+      this.plaque('st-gacha', '星笺', lx, ly + 18, [lx - 22, ly - 4, 44, 38], { badge: s.gacha.tickets > 0, onTap: () => game.go('gacha', { from: 'station' }) });
+    }
     ui.button('st-settings', 5, this.h - 26, 40, 22, { label: '设置', kind: 'ghost', onTap: () => game.push('settings') });
     nav.draw('station');
   }

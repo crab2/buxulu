@@ -6,7 +6,8 @@ const atlas = require('./atlas.js');
 const font = require('./font.js');
 const { heroGrid, PORTRAITS, courierHead, PETS } = require('../art/heroes.js');
 const { monsterGrid } = require('../art/monsters.js');
-const { ICONS, relicIcon, cropGrid, DIGITS } = require('../art/icons.js');
+const { ICONS, relicIcon, gearIcon, cardFront, cardBack, letterBig, cropGrid, DIGITS } = require('../art/icons.js');
+const { SETS } = require('../data/gear.js');
 const scenery = require('../art/scenery.js');
 const station = require('../art/station.js');
 const { Grid } = require('./paint.js');
@@ -154,6 +155,11 @@ module.exports = {
   crop: (el, stage) => cached(`crop:${el}:${stage}`, () => cropGrid(el, stage)),
   icon: (name) => cached(`i:${name}`, () => ICONS[name]()),
   relic: (shape, el, rank) => cached(`r:${shape}:${el}:${rank}`, () => relicIcon(shape, el, rank)),
+  // Each set and rarity is only baked once somebody has actually owned one.
+  gear: (p) => cached(`g:${p.slot}:${p.set}:${p.rar}`, () => gearIcon(p.slot, SETS[p.set], p.rar)),
+  cardFront: (rar) => cached(`cf:${rar}`, () => cardFront(rar)),
+  cardBack: () => cached('cb', () => cardBack()),
+  letterBig: () => cached('lb', () => letterBig()),
   peach: () => cached('peach', () => station.peachSprite()),
   medallion: (col, ring) => cached(`md:${col}:${ring}`, () => medallion(col, ring)),
   digits: (color) => cached(`d:${color}`, () => digitsGrid(color)),

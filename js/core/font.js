@@ -175,24 +175,37 @@ function drawBig(ctx, str, x, y, color, k) {
 }
 
 const NO_LINE_START = '，。！？、；：」』）》…—,.!?;:)';
+const inNumber = (ch) => /[0-9A-Za-z+%]/.test(ch);
 
-// Greedy wrap with basic Chinese line-breaking rules: punctuation never starts a line, and nothing
-// runs past the given width.
+function lineWidth(chars) {
+  return chars.reduce((w, ch) => w + glyph(ch).w, 0);
+}
+
+// Greedy wrap with basic Chinese line-breaking rules: punctuation never starts a line, a number or
+// word is never cut in two, a line never opens on a space, and nothing runs past the given width.
 function wrap(str, maxW) {
   const lines = [];
   for (const para of String(str).split('\n')) {
     let line = '', w = 0;
     for (const ch of para) {
+      if (ch === ' ' && !line) continue;
       const cw = glyph(ch).w;
       if (w + cw > maxW && line) {
-        if (NO_LINE_START.indexOf(ch) >= 0) {
-          // The last character comes down with it, so punctuation never starts a line or overhangs.
+        if (ch === ' ') continue;
+        const keepsWith = NO_LINE_START.indexOf(ch) >= 0;
+        if (keepsWith || inNumber(ch)) {
+          // Whatever must stay with this character comes down to the next line with it.
           const chars = Array.from(line);
-          const last = chars.pop();
-          if (chars.length) lines.push(chars.join(''));
-          line = last + ch;
-          w = glyph(last).w + cw;
-          continue;
+          const tail = [];
+          while (chars.length && inNumber(chars[chars.length - 1])) tail.unshift(chars.pop());
+          if (keepsWith && !tail.length && chars.length) tail.unshift(chars.pop());
+          if (chars.length) {
+            while (chars.length && chars[chars.length - 1] === ' ') chars.pop();
+            if (chars.length) lines.push(chars.join(''));
+            line = tail.join('') + ch;
+            w = lineWidth(tail) + cw;
+            continue;
+          }
         }
         lines.push(line);
         line = '';

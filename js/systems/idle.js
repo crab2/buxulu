@@ -9,6 +9,7 @@ const W = require('../data/world.js');
 const E = require('./economy.js');
 const P = require('./party.js');
 const L = require('./ledger.js');
+const Gear = require('./gear.js');
 const { Battle } = require('./battle.js');
 const { CHAPTERS, NODE_INDEX, FLAT } = require('../data/chapters.js');
 
@@ -18,6 +19,9 @@ const DUST_PER_HOUR = 4;
 const SPIRITS_PER_HOUR = 0.2;
 const ITEMS_PER_HOUR = 0.5;
 const HERBS_PER_HOUR = 1;
+const GEAR_PER_HOUR = 0.15;
+const IRON_PER_HOUR = 2;
+const TICKETS_PER_HOUR = 0.05;
 const FOOT_PER_SEC = 8 / 60; // Every minute on the road builds as much footpower as eight real steps.
 const LAP_LEVEL = 40;
 const MARCH_LI_PER_MIN = 1;
@@ -101,11 +105,13 @@ function multipliers(s, now) {
   const stride = strideBonus(s, now);
   const fortune = s.blessings.fortune * 0.02;
   const meal = s.idle.mealSecs > 0 && s.idle.meal ? W.MEALS[s.idle.meal] : null;
+  const gear = Gear.partyBonus(s).income;
   return {
     stride,
     meal,
-    coin: 1 + stride + fortune + ((meal && meal.coin) || 0),
-    xp: 1 + stride + fortune + ((meal && meal.xp) || 0),
+    gear,
+    coin: 1 + stride + fortune + gear + ((meal && meal.coin) || 0),
+    xp: 1 + stride + fortune + gear + ((meal && meal.xp) || 0),
     march: 1 + stride + s.blessings.stride * 0.03 + ((meal && meal.march) || 0),
     spirit: 1 + ((meal && meal.spirit) || 0),
     haste: s.idle.hasteSecs > 0 ? 2 : 1,
@@ -164,6 +170,7 @@ function addToPack(s, r) {
   Object.keys(r.items || {}).forEach((k) => { p.items[k] = (p.items[k] || 0) + r.items[k]; });
   Object.keys(r.herbs || {}).forEach((k) => { p.herbs[k] = (p.herbs[k] || 0) + r.herbs[k]; });
   (r.spirits || []).forEach((id) => { p.spirits[id] = (p.spirits[id] || 0) + 1; });
+  if (r.gear) p.gear = (p.gear || []).concat(r.gear);
 }
 
 function log(s, entry) {
@@ -208,6 +215,16 @@ function accrue(s, secs, r, rng) {
     c.herb -= 1;
     addToPack(s, { herbs: { [pick(W.CROP_ORDER, rng)]: 1 } });
   }
+  if (E.unlocked(s, 'gear')) {
+    I.pack.iron = (I.pack.iron || 0) + IRON_PER_HOUR * hours;
+    c.gear += GEAR_PER_HOUR * hours;
+    while (c.gear >= 1) {
+      c.gear -= 1;
+      addToPack(s, { gear: [Gear.rollDrop(s, rng)] });
+    }
+  }
+  // Letters come at the same pace for everyone: speed boosts do not make them arrive any sooner.
+  if (E.unlocked(s, 'gacha')) I.pack.tickets = (I.pack.tickets || 0) + (TICKETS_PER_HOUR * secs) / 3600;
 }
 
 // ---- The march ----
@@ -357,7 +374,8 @@ function sync(s, now, rng) {
 
 function packEmpty(s) {
   const p = s.idle.pack;
-  return p.coin < 1 && p.xp < 1 && p.dust < 1 && !Object.keys(p.items).length && !Object.keys(p.spirits).length && !Object.keys(p.herbs).length;
+  return p.coin < 1 && p.xp < 1 && p.dust < 1 && !Object.keys(p.items).length && !Object.keys(p.spirits).length && !Object.keys(p.herbs).length
+    && !(p.gear || []).length && (p.iron || 0) < 1 && (p.tickets || 0) < 1;
 }
 
 // Empties the pack into the save.
@@ -367,6 +385,7 @@ function collect(s) {
   const out = {
     coin: Math.floor(p.coin), xp: Math.floor(p.xp), dust: Math.floor(p.dust),
     items: p.items, spirits: p.spirits, herbs: p.herbs, secs: I.secs, ups: [],
+    iron: Math.floor(p.iron || 0), tickets: Math.floor(p.tickets || 0), gear: [],
   };
   E.addCoin(s, out.coin);
   E.addDust(s, out.dust);
@@ -377,7 +396,13 @@ function collect(s) {
     s.codex.monsters[id] = true;
   });
   out.ups = E.shareXp(s, out.xp);
-  I.pack = { coin: p.coin - out.coin, xp: p.xp - out.xp, dust: p.dust - out.dust, items: {}, spirits: {}, herbs: {} };
+  s.gear.iron += out.iron;
+  s.gacha.tickets += out.tickets;
+  out.gear = (p.gear || []).map((spec) => Gear.add(s, spec));
+  I.pack = {
+    coin: p.coin - out.coin, xp: p.xp - out.xp, dust: p.dust - out.dust, items: {}, spirits: {}, herbs: {},
+    gear: [], iron: (p.iron || 0) - out.iron, tickets: (p.tickets || 0) - out.tickets,
+  };
   I.secs = 0;
   nudge(s);
   return out;
