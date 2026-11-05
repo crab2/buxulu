@@ -201,7 +201,7 @@ const SUB_GAP = 1;
 
 function button(id, x, y, w, h, o) {
   o = o || {};
-  if (state.debug && state.enabled) state.boxes.push({ id, x, y, w, h, clipped: !!state.clip });
+  if (state.debug && state.enabled) state.boxes.push({ id, x, y, w, h, clipped: !!state.clip, clip: state.clip });
   const kind = KINDS[o.disabled ? 'off' : o.kind || 'normal'];
   const down = state.enabled && state.pressId === id && !o.disabled;
   const dy = down ? 1 : 0;

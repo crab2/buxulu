@@ -14,6 +14,7 @@ const P = require('../systems/party.js');
 const Idle = require('../systems/idle.js');
 const Boosts = require('../systems/boosts.js');
 const Daily = require('../systems/daily.js');
+const Gear = require('../systems/gear.js');
 const steps = require('../systems/steps.js');
 const { CHAPTERS, NODE_INDEX, STAR_NAMES } = require('../data/chapters.js');
 const O = require('./overlays.js');
@@ -326,6 +327,8 @@ class Road {
     if (O.tip('road', TIPS.road)) return;
     if (s.heroes.ruo.joined && E.unlocked(s, 'dispatch') && O.tip('station', TIPS.station)) return;
     if (E.unlocked(s, 'garden') && O.tip('trials', TIPS.trials)) return;
+    if (E.unlocked(s, 'gear') && O.tip('gear', TIPS.gear)) return;
+    if (E.unlocked(s, 'gacha') && O.tip('gacha', TIPS.gacha)) return;
   }
   // What happened while the player was away.
   showAway() {
@@ -340,6 +343,9 @@ class Road {
     rows.push({ icon: 'xp', label: '阅历', value: '+' + ui.num(p.xp), valueColor: UI.jade });
     const spirits = Object.keys(p.spirits).reduce((n, k) => n + p.spirits[k], 0);
     if (spirits) rows.push({ icon: 'spirit', label: '妖灵', value: '×' + spirits, valueColor: UI.violet });
+    if ((p.gear || []).length) rows.push({ icon: 'gear', label: '行装', value: '×' + p.gear.length, valueColor: UI.peach });
+    if (p.iron >= 1) rows.push({ icon: 'iron', label: '精铁', value: '+' + Math.floor(p.iron), valueColor: UI.blue });
+    if (p.tickets >= 1) rows.push({ icon: 'letter', label: '星笺', value: '+' + Math.floor(p.tickets), valueColor: UI.gold });
     O.modal({
       title: a.full ? '行囊装满了' : '你回来了',
       rows,
@@ -391,6 +397,9 @@ class Road {
       audio.sfx('level');
       const u = got.ups[0];
       ui.toast(`${G.HEROES[u.id].name}升到了 ${u.lv} 级${got.ups.length > 1 ? ',全队都变强了' : ''}`);
+    } else if (got.gear.length) {
+      const best = got.gear.reduce((a, g) => (g.rar > a.rar ? g : a));
+      ui.toast(`拾得行装 ${got.gear.length} 件,最好的是${Gear.name(best)}`, 1.6);
     } else ui.toast(`铜钱 +${ui.num(got.coin)}  阅历 +${ui.num(got.xp)}`, 1.2);
     v.setParty(s);
   }
@@ -477,7 +486,9 @@ class Road {
     let x = ui.iconNum('coin', ui.num(s.idle.pack.coin), tx, y + 28, UI.gold);
     x = ui.iconNum('xp', ui.num(s.idle.pack.xp), x, y + 28, UI.jade);
     const spirits = Object.keys(s.idle.pack.spirits).reduce((n, k) => n + s.idle.pack.spirits[k], 0);
-    if (spirits) ui.iconNum('spirit', spirits, x, y + 28, UI.violet);
+    if (spirits) x = ui.iconNum('spirit', spirits, x, y + 28, UI.violet);
+    const finds = (s.idle.pack.gear || []).length;
+    if (finds && x + 28 < W - m - 62) ui.iconNum('gear', finds, x, y + 28, UI.peach);
     const empty = Idle.packEmpty(s);
     ui.button('road-collect', W - m - 62, y + 7, 56, h - 14, {
       label: '收取', kind: empty ? 'normal' : 'primary', disabled: empty, badge: fill >= 0.5, sound: null, onTap: () => this.collect(),

@@ -6,10 +6,12 @@
 // Nothing a player needs in order to finish the story costs Stardust or looks at real steps.
 const D = require('../data/game.js');
 const W = require('../data/world.js');
+const F = require('../data/gear.js');
+const Gear = require('./gear.js');
 const { NODE_INDEX, CHAPTERS } = require('../data/chapters.js');
 
 function defaultSave() {
-  const hero = (joined) => ({ lv: 1, xp: 0, joined, train: { hp: 0, atk: 0, def: 0, spd: 0 }, relics: [null, null], outfit: null });
+  const hero = (joined) => ({ lv: 1, xp: 0, joined, train: { hp: 0, atk: 0, def: 0, spd: 0 }, relics: [null, null], outfit: null, gear: { blade: null, coat: null, boots: null, charm: null } });
   return {
     v: 2, seq: 0,
     coin: 0,
@@ -18,6 +20,8 @@ function defaultSave() {
     herbs: { wood: 0, fire: 0, earth: 0, metal: 0, water: 0 },
     spirits: {},
     relics: [], relicSeq: 0,
+    gear: { bag: [], seq: 0, iron: 0, fresh: 0, seen: {}, starter: false },
+    gacha: { tickets: 0, wish: null, sinceTop: 0, sinceRare: 0, total: 0, giftStars: 0, day: 0, boughtCoin: 0, boughtDust: 0 },
     heroes: { cen: hero(true), ruo: hero(false), zhuo: hero(false) },
     progress: { chapter: 0, cleared: {}, stars: 0, ending: null, lap: 0, lapAt: 0 },
     codex: { recipes: {}, monsters: {} },
@@ -27,8 +31,8 @@ function defaultSave() {
     idle: {
       last: 0, secs: 0, total: 0, li: 0, toNext: 0, target: null, wait: 0, blocked: null,
       hasteSecs: 0, meal: null, mealSecs: 0, dashLi: 0,
-      pack: { coin: 0, xp: 0, dust: 0, items: {}, spirits: {}, herbs: {} },
-      carry: { spirit: 0, item: 0, herb: 0 },
+      pack: { coin: 0, xp: 0, dust: 0, items: {}, spirits: {}, herbs: {}, gear: [], iron: 0, tickets: 0 },
+      carry: { spirit: 0, item: 0, herb: 0, gear: 0, iron: 0, ticket: 0 },
       log: [],
     },
     dispatch: { active: [], board: [], nextJob: 0, seq: 0, done: 0, rank: {} },
@@ -63,7 +67,24 @@ function upgrade(save) {
     // Saves from the turn-based version start the road where they had got to, with their Stardust intact.
     save.v = 2;
   }
+  // Saves from before equipment existed collect what they have already earned by coming this far.
+  grantMilestones(save);
   return save;
+}
+
+// What reaching a point on the road hands over. Safe to run at any time: each gift pays only once.
+function grantMilestones(s) {
+  if (unlocked(s, 'gear') && !s.gear.starter) {
+    s.gear.starter = true;
+    ['blade', 'coat'].forEach((slot) => {
+      const p = Gear.add(s, { set: 'wolf', slot, rar: 0 });
+      if (!s.heroes.cen.gear[slot]) Gear.equip(s, 'cen', p.uid);
+    });
+  }
+  while (s.gacha.giftStars < s.progress.stars) {
+    s.gacha.giftStars++;
+    s.gacha.tickets += F.STAR_TICKETS(s.gacha.giftStars);
+  }
 }
 
 function addDust(s, n) {
@@ -204,7 +225,15 @@ function battleRewards(s, enemies, nodeId, day) {
   });
   addItems(s, drops);
   const ups = shareXp(s, r.xp);
-  return { xp: r.xp, coin: r.coin, dust: r.dust, drops, ups };
+  return { xp: r.xp, coin: r.coin, dust: r.dust, drops, ups, gear: bossGear(s, nodeId) };
+}
+
+// The first time a boss falls it hands over a piece of the set its star opens.
+function bossGear(s, nodeId) {
+  if (!nodeId || s.progress.cleared[nodeId]) return null;
+  const { node, ci } = NODE_INDEX[nodeId];
+  if (node.type !== 'boss') return null;
+  return Gear.add(s, Gear.bossDrop(ci, starsForBoss(nodeId)));
 }
 
 function addSpirits(s, ids) {
@@ -259,6 +288,7 @@ function clearNode(s, nodeId) {
     litStar = true;
   }
   if (chapterCleared(s, ci) && s.progress.chapter === ci && ci + 1 < CHAPTERS.length) s.progress.chapter = ci + 1;
+  grantMilestones(s);
   return { litStar, first: !was };
 }
 
@@ -396,7 +426,7 @@ function relicOwner(s, uid) {
 }
 
 module.exports = {
-  defaultSave, upgrade, addDust, addCoin, addItems, addHerbs, canAfford, spendDust, spendCoin, applyGrants, addXp, shareXp,
+  defaultSave, upgrade, grantMilestones, addDust, addCoin, addItems, addHerbs, canAfford, spendDust, spendCoin, applyGrants, addXp, shareXp,
   battleRewards, nodeRewards, addSpirits, joinHero, nodeUnlocked, chapterCleared, chaptersDone, unlocked, clearNode, starsLit,
   claimStipend, stipendAmount, STIPEND, buyItem, train, autoTrain, previewRefine, startRefine, collectRefined, meltRelic, FURNACE_SLOTS,
   equipRelic, unequipRelic, relicOwner, STEPS_PER_LI, STEPS_PER_ROLL, REPLAY_LIMIT,

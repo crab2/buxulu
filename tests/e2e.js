@@ -92,7 +92,7 @@ async function settle(d, scene, timeout = 15000) {
 const prepare = (d, fn, arg) => d.page.evaluate(({ src, a }) => {
   const B = window.__BUXU__, s = B.store.get();
   s.flags.intro = true;
-  s.flags.tips = { road: 1, station: 1, trials: 1, battle: 1, charge: 1, seal: 1 };
+  s.flags.tips = { road: 1, station: 1, trials: 1, battle: 1, charge: 1, seal: 1, gear: 1, gacha: 1 };
   B.chapters.CHAPTERS.forEach((c) => { s.flags.seen[c.intro] = 1; });
   // eslint-disable-next-line no-new-func
   const f = new Function('B', 's', 'a', src);
@@ -100,6 +100,19 @@ const prepare = (d, fn, arg) => d.page.evaluate(({ src, a }) => {
   s.idle.last = B.clock.now();
   B.store.persist();
 }, { src: fn, a: arg });
+
+// Turns every card by tapping, as a player would. The game clock is held nearly still while it does, so a
+// fast-forwarded test or a slow machine cannot finish the animation out from under the tap.
+async function flipCards(d) {
+  const speed = await d.page.evaluate(() => {
+    const g = window.__BUXU__.game, k = g.timeScale;
+    g.timeScale = 0.02;
+    return k;
+  });
+  if (await d.has('open-skip')) await d.tap('open-skip');
+  await d.page.evaluate((k) => { window.__BUXU__.game.timeScale = k; }, speed);
+  await d.waitFor('open-close', 6000);
+}
 
 const OPEN_ALL = `
   ['c1a','c1b','c1c','c1d','c1e','c1f','c1g','c1h','c2a','c2b'].forEach((id) => { s.progress.cleared[id] = true; });
@@ -128,6 +141,8 @@ async function assertTidy(d, where) {
       texts.forEach((t) => {
         if (t.x < -1 || t.x + t.w > W + 1) out.push(`"${t.str}" runs off the screen (x ${Math.round(t.x)}..${Math.round(t.x + t.w)} of ${W})`);
         boxes.forEach((b) => {
+          // A list runs on under the fixed bars. A button scrolled out of its clip cannot touch what is drawn over it.
+          if (b.clip && !t.clipped && (t.y + t.h <= b.clip.y || t.y >= b.clip.y + b.clip.h)) return;
           const ox = Math.min(t.x + t.w, b.x + b.w) - Math.max(t.x, b.x);
           const oy = Math.min(t.y + t.h, b.y + b.h) - Math.max(t.y, b.y);
           if (ox <= 1 || oy <= 1) return;
@@ -607,6 +622,389 @@ async function assertOnScreen(d, where) {
     await d.ctx.close();
   });
 
+  await check('equipment: forge, wear, upgrade, promote and complete a set by hand', async () => {
+    const d = await open(browser, { speed: 4 });
+    await prepare(d, `${OPEN_ALL}; s.coin = 5000000; s.gear.iron = 2000; s.gear.starter = true;`);
+    await go(d, 'party');
+    await d.waitScene('Party');
+    await assertTidy(d, 'party with empty slots');
+    const atk0 = await d.page.evaluate(() => { const B = window.__BUXU__; return B.party.heroStats(B.store.get(), 'cen').atk; });
+    await d.tap('gear-blade');
+    await d.waitScene('GearPick');
+    await assertTidy(d, 'slot picker');
+    await shot(d, 'gear-pick');
+    await d.tap('forge-wolf');
+    let s = await d.state();
+    assert.strictEqual(s.gear.bag.length, 1, 'forged one');
+    assert.strictEqual(s.gear.iron, 2000 - 30);
+    assert.strictEqual(s.coin, 5000000 - 3000);
+    const uid = s.gear.bag[0].uid;
+    await d.tap('pick-' + uid);
+    await d.waitScene('Party');
+    s = await d.state();
+    assert.strictEqual(s.heroes.cen.gear.blade, uid, 'worn');
+    await d.tap('gear-blade');
+    await d.waitScene('GearDetail');
+    await assertTidy(d, 'piece detail');
+    await assertOnScreen(d, 'piece detail');
+    await shot(d, 'gear-detail');
+    await d.tap('detail-up');
+    s = await d.state();
+    assert.strictEqual(s.gear.bag[0].lv, 1);
+    assert.ok(s.daily.done.gear, 'upgrading counts toward the daily errand');
+    await d.tap('detail-up-all');
+    s = await d.state();
+    assert.strictEqual(s.gear.bag[0].lv, 10, 'stops at the rarity cap');
+    await d.tap('detail-up');
+    s = await d.state();
+    assert.strictEqual(s.gear.bag[0].rar, 1, 'promoted');
+    assert.strictEqual(s.gear.bag[0].lv, 10, 'and keeps its levels');
+    await d.tap('detail-close');
+    await d.waitScene('Party');
+    const atk1 = await d.page.evaluate(() => { const B = window.__BUXU__; return B.party.heroStats(B.store.get(), 'cen').atk; });
+    assert.ok(atk1 > atk0, `attack ${atk0} -> ${atk1}`);
+    // The other three pieces of the set, then the set effect switches on.
+    for (const slot of ['coat', 'boots', 'charm']) {
+      await d.tap('gear-' + slot);
+      await d.waitScene('GearPick');
+      await d.tap('forge-wolf');
+      const fresh = (await d.state()).gear.bag.find((p) => p.slot === slot);
+      await d.tap('pick-' + fresh.uid);
+      await d.waitScene('Party');
+    }
+    const mods = await d.page.evaluate(() => { const B = window.__BUXU__; return B.party.heroStats(B.store.get(), 'cen').mods; });
+    assert.ok(mods.rage > 0, 'the full set is active');
+    await assertTidy(d, 'party with a full set');
+    await shot(d, 'gear-party');
+    // Taking one piece off ends the effect.
+    await d.tap('gear-charm');
+    await d.waitScene('GearDetail');
+    await d.tap('detail-wear-cen');
+    await d.tap('detail-close');
+    await d.waitScene('Party');
+    const mods2 = await d.page.evaluate(() => { const B = window.__BUXU__; return B.party.heroStats(B.store.get(), 'cen').mods; });
+    assert.strictEqual(mods2.rage, undefined);
+    // One-tap helpers.
+    await d.tap('gear-auto-equip');
+    s = await d.state();
+    assert.ok(s.heroes.cen.gear.charm, 'one tap put it back on');
+    const lv = s.gear.bag.reduce((a, p) => a + p.lv, 0);
+    await d.tap('gear-auto-up');
+    s = await d.state();
+    assert.ok(s.gear.bag.reduce((a, p) => a + p.lv, 0) > lv, 'one tap upgraded');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('bag: browse, read the sets, and break down only what cannot be missed', async () => {
+    const d = await open(browser, { speed: 4 });
+    await prepare(d, `
+      ${OPEN_ALL};
+      s.gear.starter = true;
+      s.progress.stars = 3;
+      s.gear.bag = [
+        { uid: 'g1', set: 'wolf', slot: 'blade', rar: 3, lv: 12 },
+        { uid: 'g2', set: 'wolf', slot: 'blade', rar: 1, lv: 0 },
+        { uid: 'g3', set: 'wolf', slot: 'blade', rar: 0, lv: 0 },
+        { uid: 'g4', set: 'gate', slot: 'coat', rar: 2, lv: 3 },
+      ];
+      s.gear.seq = 4; s.gear.fresh = 4;
+      s.heroes.cen.gear.blade = 'g1';
+    `);
+    await go(d, 'party');
+    await d.waitScene('Party');
+    await d.tap('gear-bag');
+    await d.waitScene('GearBag');
+    await assertTidy(d, 'bag');
+    await shot(d, 'gear-bag');
+    assert.strictEqual((await d.state()).gear.fresh, 0, 'opening the bag clears the marker');
+    await d.tap('bag-g4');
+    await d.waitScene('GearDetail');
+    await assertTidy(d, 'detail from the bag');
+    await d.tap('detail-close');
+    await d.waitScene('GearBag');
+    await d.tap('bag-salvage');
+    await d.waitScene('Modal');
+    await assertTidy(d, 'salvage summary');
+    await d.tap('modal-1');
+    await d.waitScene('GearBag');
+    let s = await d.state();
+    assert.deepStrictEqual(s.gear.bag.map((p) => p.uid).sort(), ['g1', 'g2', 'g4'], 'only the spare went');
+    assert.ok(s.gear.iron > 0);
+    await d.tap('tab-sets');
+    await d.page.waitForTimeout(80);
+    await assertTidy(d, 'set list');
+    await shot(d, 'gear-sets');
+    // Scrolling reaches the end of the list without losing the header.
+    await d.page.evaluate(() => { window.__BUXU__.game.top().scroll = 9999; });
+    await d.page.waitForTimeout(80);
+    await assertTidy(d, 'set list, scrolled');
+    await d.tap('back');
+    await d.waitScene('Party');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('star letters: published odds, a ten-draw flip, and nothing lost on reload', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, `${OPEN_ALL}; s.gear.starter = true; s.gacha.giftStars = 1; s.gacha.tickets = 13; s.stardust = 1000; s.coin = 500000;`);
+    await go(d, 'trials');
+    await d.waitScene('Trials');
+    await assertTidy(d, 'trials with the draw');
+    await d.tap('trial-gacha');
+    await d.waitScene('GachaScene');
+    await assertTidy(d, 'draw screen');
+    await assertOnScreen(d, 'draw screen');
+    await shot(d, 'gacha');
+    // The rates on screen come from the same table the draw uses.
+    await d.tap('gacha-rates');
+    await d.waitScene('Modal');
+    await assertTidy(d, 'published odds');
+    await shot(d, 'gacha-rates');
+    const told = await d.page.evaluate(() => {
+      const B = window.__BUXU__;
+      return { rows: B.game.top().p.rows.map((r) => r.value), rates: B.gearData.DRAW_RATES, real: B.gacha.effectiveRates() };
+    });
+    [3, 2, 1, 0].forEach((rar, i) => {
+      const shown = told.rows[i];
+      assert.ok(shown.startsWith(`${Math.round(told.rates[rar] * 10000) / 100}%`), `${shown} vs ${told.rates[rar]}`);
+      assert.ok(shown.includes(`${Math.round(told.real[rar] * 10000) / 100}%`), `${shown} vs ${told.real[rar]}`);
+    });
+    await d.tap('modal-0');
+    await d.waitScene('GachaScene');
+    await d.tap('gacha-wish');
+    await d.waitScene('Modal');
+    await assertTidy(d, 'wish list');
+    await d.tap('modal-1');
+    await d.waitScene('GachaScene');
+    assert.strictEqual((await d.state()).gacha.wish, 'gate');
+    const dust0 = (await d.state()).stardust;
+    await d.tap('gacha-ten');
+    await d.waitScene('CardReveal');
+    // Spent and saved already, before a single card has turned.
+    let s = await d.state();
+    assert.strictEqual(s.gacha.tickets, 3);
+    assert.strictEqual(s.gear.bag.length, 10);
+    assert.strictEqual(s.stardust, dust0, 'earned letters cost no Stardust');
+    assert.ok(s.gear.bag.some((p) => p.rar >= 2), 'ten letters hold a rare piece');
+    await d.page.evaluate(() => { window.__BUXU__.game.timeScale = 0.5; });
+    await d.page.waitForTimeout(500);
+    await d.page.evaluate(() => { window.__BUXU__.game.timeScale = 0.02; });
+    await shot(d, 'gacha-flipping');
+    await d.page.evaluate(() => { window.__BUXU__.game.timeScale = 3; });
+    await flipCards(d);
+    await assertTidy(d, 'cards revealed');
+    await assertOnScreen(d, 'cards revealed');
+    await shot(d, 'gacha-ten');
+    await d.tap('card-3');
+    assert.strictEqual(await d.page.evaluate(() => window.__BUXU__.game.top().sel), 3, 'tapping a card reads it');
+    assert.strictEqual(await d.has('open-again'), false, 'not enough letters for another ten');
+    await d.tap('open-close');
+    await d.waitScene('GachaScene');
+    // Coming back from a closed game, the pieces are still there.
+    const bag = (await d.state()).gear.bag.length;
+    await d.page.evaluate(() => window.__BUXU__.store.persist());
+    await d.page.reload();
+    await d.page.waitForFunction(() => window.__BUXU__ && window.__BUXU__.game.top());
+    s = await d.state();
+    assert.strictEqual(s.gear.bag.length, bag);
+    assert.strictEqual(s.gacha.tickets, 3);
+    assert.strictEqual(s.gacha.total, 10);
+    await go(d, 'gacha', { from: 'party' });
+    await d.waitScene('GachaScene');
+    await d.tap('gacha-one');
+    await d.waitScene('CardReveal');
+    await flipCards(d);
+    await assertTidy(d, 'one card');
+    await shot(d, 'gacha-one');
+    await d.tap('open-again');
+    await d.waitScene('CardReveal');
+    await flipCards(d);
+    assert.strictEqual((await d.state()).gacha.tickets, 1);
+    await d.tap('open-wear');
+    await d.waitScene('Party');
+    // Buying more stops at the daily limit.
+    await go(d, 'gacha');
+    await d.waitScene('GachaScene');
+    const t0 = (await d.state()).gacha.tickets;
+    for (let i = 0; i < 5; i++) await d.tap('gacha-buy-coin');
+    assert.strictEqual((await d.state()).gacha.tickets, t0 + 5);
+    assert.strictEqual(await d.has('gacha-buy-coin'), false, 'the limit is reached');
+    await d.tap('gacha-buy-dust');
+    assert.strictEqual((await d.state()).gacha.tickets, t0 + 6);
+    await assertTidy(d, 'after buying');
+    await d.tap('back');
+    await d.waitScene('Trials');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('wrapped text never cuts a number in two or opens a line on a space', async () => {
+    const d = await open(browser, { speed: 3 });
+    const lines = await d.page.evaluate(() => {
+      const f = window.__BUXU__.font;
+      const out = [];
+      // Every width a phone might use, across all the longest text in these screens.
+      const F = window.__BUXU__.gearData;
+      const texts = F.SET_ORDER.map((id) => `四件 · ${F.SETS[id].four.name}:${F.SETS[id].four.desc}`);
+      texts.push('每 10 封内必有玄品以上,每 60 封内必有仙品。玄品和仙品有 50% 来自心愿套装。');
+      texts.forEach((t) => {
+        for (let w = 120; w <= 340; w += 3) out.push({ t, w, lines: f.wrap(t, w) });
+      });
+      return out;
+    });
+    lines.forEach(({ t, w, lines: ls }) => {
+      assert.strictEqual(ls.join('').replace(/ /g, ''), t.replace(/ /g, ''), `text lost at width ${w}`);
+      ls.forEach((l, i) => {
+        assert.ok(!l.startsWith(' '), `line opens on a space at width ${w}: "${l}"`);
+        if (i > 0) {
+          const joined = ls[i - 1].slice(-1) + l[0];
+          assert.ok(!/^[0-9+%][0-9%]$/.test(joined), `a number was cut at width ${w}: "${ls[i - 1]}" / "${l}"`);
+        }
+      });
+    });
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('first-time notes explain equipment and the letters, once each', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, `${OPEN_ALL}; delete s.flags.tips.gear; delete s.flags.tips.gacha; s.gear.starter = true;`);
+    await go(d, 'road');
+    await d.waitScene('Modal');
+    assert.ok((await d.page.evaluate(() => window.__BUXU__.game.top().p.text)).includes('行装'), 'equipment is explained first');
+    await assertTidy(d, 'equipment note');
+    await assertOnScreen(d, 'equipment note');
+    await shot(d, 'tip-gear');
+    await d.tap('modal-0');
+    await d.waitScene('Modal');
+    assert.ok((await d.page.evaluate(() => window.__BUXU__.game.top().p.text)).includes('星笺'), 'then the letters');
+    await assertTidy(d, 'letters note');
+    await assertOnScreen(d, 'letters note');
+    await shot(d, 'tip-gacha');
+    await d.tap('modal-0');
+    await d.waitScene('Road');
+    await d.page.waitForTimeout(200);
+    assert.strictEqual(await d.scene(), 'Road', 'and nothing more comes up');
+    await go(d, 'road');
+    await d.page.waitForTimeout(250);
+    assert.strictEqual(await d.scene(), 'Road', 'once each');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('a save from before equipment loads, keeps its progress and collects its gifts', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, OPEN_ALL + `
+      s.coin = 12345; s.stardust = 678;
+      s.heroes.cen.lv = 12;
+      s.idle.pack = { coin: 5, xp: 0, dust: 0, items: {}, spirits: {}, herbs: {} };
+      delete s.gear; delete s.gacha;
+      ['cen', 'ruo', 'zhuo'].forEach((id) => { delete s.heroes[id].gear; });
+      delete s.idle.carry.gear; delete s.idle.carry.iron; delete s.idle.carry.ticket;
+    `);
+    // On disk now is a save with no equipment fields at all, as an older version of the game would have left it.
+    await d.page.reload();
+    await d.page.waitForFunction(() => window.__BUXU__ && window.__BUXU__.game.top());
+    const s = await d.state();
+    assert.strictEqual(s.coin, 12345, 'coins kept');
+    assert.strictEqual(s.stardust, 678, 'Stardust kept');
+    assert.strictEqual(s.heroes.cen.lv, 12, 'levels kept');
+    assert.ok(s.progress.cleared.c1h, 'progress kept');
+    assert.strictEqual(s.gear.bag.length, 2, 'the starter pair');
+    assert.ok(s.heroes.cen.gear.blade, 'worn');
+    assert.strictEqual(s.gacha.tickets, 10, 'and the letters from the star already lit');
+    await d.page.evaluate(() => { window.__BUXU__.game.timeScale = 3; });
+    await d.tap('title-start');
+    await settle(d, 'Road');
+    await go(d, 'party');
+    await d.waitScene('Party');
+    await assertTidy(d, 'party on an old save');
+    await go(d, 'gacha');
+    await d.waitScene('GachaScene');
+    await d.tap('gacha-ten');
+    await d.waitScene('CardReveal');
+    await flipCards(d);
+    await d.tap('open-close');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('the draw and equipment stay out of the way until the road opens them', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, 's.settings.auto = false;');
+    await go(d, 'party');
+    await d.waitScene('Party');
+    assert.strictEqual(await d.has('gear-blade'), false, 'no equipment panel on the first steps');
+    await go(d, 'trials');
+    await d.waitScene('Trials');
+    assert.strictEqual(await d.has('trial-gacha'), false, 'the draw is locked');
+    await go(d, 'station');
+    await d.waitScene('Station');
+    assert.strictEqual(await d.has('st-gacha'), false);
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('set effects play out on the battle screen without a hitch', async () => {
+    const d = await open(browser, { speed: 8 });
+    // Everyone in a full set whose effect shows on screen, with the odds of each fixed high by the fight below.
+    await prepare(d, `
+      ${OPEN_ALL};
+      s.gear.starter = true;
+      s.progress.stars = 6;
+      s.settings.auto = true; s.settings.speed = 3;
+      const make = (hero, set) => ['blade', 'coat', 'boots', 'charm'].forEach((slot) => {
+        const uid = 'x' + hero + slot;
+        s.gear.bag.push({ uid, set, slot, rar: 1, lv: 5 });
+        s.heroes[hero].gear[slot] = uid;
+      });
+      make('cen', 'wolf'); make('ruo', 'wen'); make('zhuo', 'wu');
+    `);
+    await go(d, 'battle', { fight: { lv: 12, foes: ['bifang', 'firerat', 'wisp'] }, chapter: 1, from: 'road' });
+    await d.waitFor('win-continue', 40000);
+    await assertTidy(d, 'victory with set effects');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('the road reports what it found, and a boss hands over a piece on the victory screen', async () => {
+    const d = await open(browser, { speed: 6 });
+    await prepare(d, `
+      ['cen','ruo','zhuo'].forEach((id) => { s.heroes[id].joined = true; s.heroes[id].lv = 40; s.heroes[id].train = { hp: 40, atk: 40, def: 40, spd: 15 }; });
+      'abcdefg'.split('').forEach((l) => { s.progress.cleared['c1' + l] = true; });
+      s.gear.starter = true;
+      s.flags.seen.c1_boss = 1; s.flags.seen.c1_after = 1;
+      s.settings.auto = true; s.settings.speed = 3;
+      s.idle.target = 'c1h'; s.idle.toNext = 99;
+      s.idle.pack = { coin: 1000, xp: 10, dust: 0, items: {}, spirits: {}, herbs: {}, gear: [{ set: 'wolf', slot: 'coat', rar: 1 }, { set: 'wolf', slot: 'boots', rar: 0 }], iron: 12.5, tickets: 2.5 };
+      s.idle.secs = 7200;
+    `);
+    await go(d, 'road');
+    await settle(d, 'Road');
+    await assertTidy(d, 'road with finds in the pack');
+    await shot(d, 'road-gear');
+    await d.tap('road-collect');
+    let s = await d.state();
+    assert.strictEqual(s.gear.bag.length, 2);
+    assert.strictEqual(s.gear.iron, 12);
+    assert.strictEqual(s.gacha.tickets, 2);
+    assert.ok(s.gear.fresh >= 2);
+    assert.ok((await d.page.evaluate(() => window.__BUXU__.game.top().constructor.name)) === 'Road');
+    await d.tap('road-act');
+    await d.waitFor('win-continue', 40000);
+    await assertTidy(d, 'boss victory');
+    await shot(d, 'boss-gear');
+    s = await d.state();
+    assert.strictEqual(s.gear.bag.length, 3, 'the boss handed over a piece');
+    assert.ok(s.gear.bag.some((p) => p.set === 'gate'), 'from the set its star opens');
+    assert.strictEqual(s.gacha.tickets, 2 + 10, 'and the first star sends its gift of letters');
+    const shown = await d.page.evaluate(() => window.__BUXU__.game.top().result.rw.tickets);
+    assert.strictEqual(shown, 10, 'which the victory screen reports');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
   await check('couriers: send a letter, close the game, come back to the reply', async () => {
     const d = await open(browser, { speed: 3 });
     await prepare(d, OPEN_ALL);
@@ -876,6 +1274,18 @@ async function assertOnScreen(d, where) {
         s.letters.got = [0, 1, 2];
         s.settings.auto = false;
         s.flags.seen.c1_first_step = 1; s.flags.seen.c2_mother = 1;
+        s.gear.starter = true; s.gacha.giftStars = 1;
+        s.gacha.tickets = 25; s.gear.iron = 1234;
+        s.progress.stars = 6;
+        const all = [];
+        ['wolf', 'gate', 'lian', 'po'].forEach((set, i) => ['blade', 'coat', 'boots', 'charm'].forEach((slot, k) => {
+          all.push({ uid: 'g' + i + k, set, slot, rar: (i + k) % 4, lv: (i + 1) * 3 + k });
+        }));
+        s.gear.bag = all; s.gear.seq = 99;
+        ['blade', 'coat', 'boots', 'charm'].forEach((slot, k) => { s.heroes.cen.gear[slot] = 'g0' + k; });
+        ['blade', 'coat'].forEach((slot, k) => { s.heroes.ruo.gear[slot] = 'g1' + k; });
+        ['boots', 'charm'].forEach((slot, k) => { s.heroes.ruo.gear[slot] = 'g2' + (k + 2); });
+        s.progress.stars = 1;
       `);
       const visit = async (where, scene, params) => {
         await go(d, scene, params);
@@ -900,6 +1310,48 @@ async function assertOnScreen(d, where) {
       await visit('furnace', 'furnace');
       await visit('tower', 'tower');
       await visit('wander', 'wander');
+      await visit('gearbag', 'gearbag');
+      await d.tap('tab-sets');
+      await d.page.waitForTimeout(100);
+      await assertTidy(d, 'set list');
+      await shot(d, `${name}-gear-sets`);
+      await visit('gacha', 'gacha');
+      await d.tap('gacha-wish');
+      await d.waitScene('Modal');
+      await assertOnScreen(d, 'wish list');
+      await assertTidy(d, 'wish list');
+      await d.tap('modal-0');
+      await d.waitScene('GachaScene');
+      await d.tap('gacha-rates');
+      await d.waitScene('Modal');
+      await assertOnScreen(d, 'published odds');
+      await assertTidy(d, 'published odds');
+      await shot(d, `${name}-gacha-rates`);
+      await d.tap('modal-0');
+      await d.waitScene('GachaScene');
+      await d.tap('gacha-ten');
+      await d.waitScene('CardReveal');
+      await flipCards(d);
+      await assertOnScreen(d, 'cards');
+      await assertTidy(d, 'cards');
+      await shot(d, `${name}-gacha-ten`);
+      await d.tap('open-close');
+      await go(d, 'party');
+      await d.waitScene('Party');
+      await d.tap('gear-blade');
+      await d.waitScene('GearDetail');
+      await assertOnScreen(d, 'gear detail');
+      await assertTidy(d, 'gear detail');
+      await shot(d, `${name}-gear-detail`);
+      await d.tap('detail-swap');
+      await d.waitScene('GearPick');
+      await assertOnScreen(d, 'gear pick');
+      await assertTidy(d, 'gear pick');
+      await shot(d, `${name}-gear-pick`);
+      await d.tap('pick-close');
+      await d.waitScene('GearDetail');
+      await d.tap('detail-close');
+      await d.waitScene('Party');
       await visit('map', 'map', { chapter: 1 });
       await d.tap('map-go').catch(() => {});
       await go(d, 'battle', { fight: { lv: 12, foes: ['bifang', 'firerat', 'wisp'] }, chapter: 1, from: 'road' });
@@ -940,10 +1392,38 @@ async function assertOnScreen(d, where) {
       const st = await d.page.evaluate(() => window.__BUXU__.art.stats());
       report.push({ label, ...dc, ...st });
     };
-    for (const sc of ['road', 'station', 'party', 'trials', 'altar', 'dispatch', 'garden', 'wardrobe', 'furnace', 'shop', 'tower', 'wander', 'letters']) {
+    for (const sc of ['road', 'station', 'party', 'trials', 'altar', 'dispatch', 'garden', 'wardrobe', 'furnace', 'shop', 'tower', 'wander', 'letters', 'gearbag', 'gacha']) {
       await go(d, sc);
       await measure(sc);
     }
+    // The fullest the new screens get: a bag of every set and rarity, and ten cards face up.
+    await d.page.evaluate(() => {
+      const B = window.__BUXU__, s = B.store.get(), F = B.gearData;
+      s.progress.stars = 6;
+      s.gear.starter = true;
+      F.SET_ORDER.forEach((set, i) => F.SLOT_ORDER.forEach((slot, k) => {
+        s.gear.bag.push({ uid: 'b' + i + k, set, slot, rar: (i + k) % 4, lv: i + k });
+      }));
+      s.gacha.tickets = 10;
+    });
+    await go(d, 'gearbag');
+    await measure('full bag');
+    await go(d, 'party');
+    await d.tap('gear-auto-equip');
+    await measure('party, dressed');
+    await go(d, 'gacha');
+    await d.waitScene('GachaScene');
+    await d.tap('gacha-ten');
+    await d.waitScene('CardReveal');
+    await flipCards(d);
+    await measure('ten cards');
+    await d.tap('open-close');
+    await d.page.evaluate(() => {
+      const s = window.__BUXU__.store.get();
+      s.progress.stars = 1;
+      s.gear.bag = [];
+      ['cen', 'ruo', 'zhuo'].forEach((id) => ['blade', 'coat', 'boots', 'charm'].forEach((k) => { s.heroes[id].gear[k] = null; }));
+    });
     for (let c = 0; c < 6; c++) {
       await d.page.evaluate((ci) => {
         const B = window.__BUXU__, s = B.store.get();

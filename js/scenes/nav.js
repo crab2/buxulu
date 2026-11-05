@@ -49,6 +49,7 @@ function stationBusy(s, now) {
 function trialsBusy(s, now) {
   const day = Idle.dayOf(now);
   if (Daily.pending(s, day)) return true;
+  if (E.unlocked(s, 'gacha') && s.gacha.tickets > 0) return true;
   if (!E.unlocked(s, 'wander')) return false;
   Wander.regen(s, now);
   return s.wander.rolls > 0;
@@ -62,7 +63,7 @@ function altarBusy(s, now) {
 
 function badges(s, now) {
   return {
-    party: s.coin >= cheapestTier(s),
+    party: s.coin >= cheapestTier(s) || s.gear.fresh > 0,
     station: stationBusy(s, now),
     trials: trialsBusy(s, now),
     altar: altarBusy(s, now),

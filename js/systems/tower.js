@@ -35,14 +35,17 @@ function reward(floor) {
     xp: Math.round(G.xpPerMin(spec.lv) * 15),
     items: {},
     spirits: [],
+    tickets: 0,
   };
   if (floor % 5 === 0) {
     r.items.seal = 2;
     r.items.pill = 2;
+    r.tickets = 1;
   }
   if (floor % 10 === 0) {
     r.dust += 60;
     r.items.incense = 1;
+    r.tickets = 3;
     const pool = Idle.poolFor(spec.ci).filter((id) => G.MONSTERS[id].elite);
     r.spirits = [pool[0], pool[0]];
   }
@@ -58,6 +61,7 @@ function win(s, floor) {
   E.addCoin(s, r.coin);
   E.addItems(s, r.items);
   E.addSpirits(s, r.spirits);
+  s.gacha.tickets += r.tickets;
   return { reward: r, ups: E.shareXp(s, r.xp) };
 }
 

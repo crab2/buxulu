@@ -18,6 +18,7 @@ class Battle {
     this.turns = 0;
     this.heroes.forEach((u) => {
       if (u.startShield) u.shield = u.startShield;
+      if (u.mods.ultStart) this.ult = Math.min(ULT_FULL, this.ult + u.mods.ultStart);
     });
   }
 
@@ -34,6 +35,7 @@ class Battle {
   stat(u, k) {
     let v = u[k];
     if (k === 'atk' && u.statuses.atkUp) v *= 1.25;
+    if (k === 'atk' && u.rage) v *= 1 + u.rage;
     if (k === 'def' && u.statuses.defUp) v *= 1.35;
     if (k === 'def' && u.statuses.weak) v *= 0.7;
     return v;
@@ -92,7 +94,7 @@ class Battle {
     const amount = Math.max(1, Math.round(u.maxHp * pct));
     u.hp = Math.max(0, u.hp - amount);
     ev.push({ type: 'dot', target: u, amount, status });
-    if (u.hp <= 0) this.down(u, ev);
+    if (u.hp <= 0) this.fall(u, ev);
   }
 
   restore(u, amount, ev) {
@@ -109,6 +111,17 @@ class Battle {
     u.statuses = {};
     u.charging = null;
     ev.push({ type: 'ko', target: u });
+  }
+
+  // A blow that would finish a unit. One wearing the full 巨门 set shrugs off the first of each fight.
+  fall(u, ev) {
+    if (u.mods.lastStand && !u.stood) {
+      u.stood = true;
+      u.hp = Math.max(1, Math.round(u.maxHp * u.mods.lastStand));
+      ev.push({ type: 'setfx', target: u, text: '不破' });
+      return;
+    }
+    this.down(u, ev);
   }
 
   check() {
@@ -149,25 +162,53 @@ class Battle {
     if (crit) d *= 1.6 + (a.mods.critDmg || 0);
     d *= 0.92 + this.rng() * 0.16;
     if (opt.skill && a.mods.skillDmg) d *= 1 + a.mods.skillDmg;
+    if (a.mods.ailmentDmg && Object.keys(t.statuses).some((k) => D.STATUS[k].bad)) d *= 1 + a.mods.ailmentDmg;
     if (t.statuses.guard) d *= 0.5;
     if (t.mods.dmgTaken) d *= 1 - t.mods.dmgTaken;
     return { amount: Math.max(1, Math.round(d)), crit, eff: mult > 1 ? 'weak' : mult < 1 ? 'resist' : null };
   }
 
   strike(a, t, sk, ev, opt) {
-    if (!t.alive) return;
+    // A counterattack can fell an enemy halfway through a sweep, which ends the rest of that sweep.
+    if (!t.alive || !a.alive) return;
     const r = this.damage(a, t, sk.power, sk.el, Object.assign({ ignore: sk.ignore, defScale: sk.defScale, skill: !!sk.mp }, opt || {}));
     t.hp = Math.max(0, t.hp - r.amount);
     ev.push({ type: 'hit', actor: a, target: t, amount: r.amount, crit: r.crit, eff: r.eff, el: sk.el, fx: sk.fx || 'slash' });
     if (a.side === 'hero') this.ult = Math.min(ULT_FULL, this.ult + 5);
     else this.ult = Math.min(ULT_FULL, this.ult + 3);
+    if (r.crit && a.mods.ultCrit) this.ult = Math.min(ULT_FULL, this.ult + a.mods.ultCrit);
     if (a.mods.lifesteal && a.alive) this.restore(a, Math.round(r.amount * a.mods.lifesteal), ev);
-    if (t.hp <= 0) this.down(t, ev);
+    if (t.hp <= 0) this.fall(t, ev);
     else {
       if (sk.status && this.rng() < (sk.chance === undefined ? 1 : sk.chance)) this.apply(t, sk.status, sk.turns || 2, ev);
       if (a.mods.burnChance && this.rng() < a.mods.burnChance) this.apply(t, 'burn', 2, ev);
+      if (a.mods.weakChance && this.rng() < a.mods.weakChance) this.apply(t, 'weak', 2, ev);
       this.phaseCheck(t, ev);
+      this.counter(a, t, ev, opt);
     }
+  }
+
+  // 武曲: the one struck may hit straight back. A counterattack never provokes another.
+  counter(a, t, ev, opt) {
+    if (!t.mods.counter || (opt && opt.isCounter) || !a.alive || a.side === t.side) return;
+    if (this.rng() >= t.mods.counter) return;
+    ev.push({ type: 'setfx', target: t, text: '镇岳' });
+    this.strike(t, a, { power: t.mods.counterPower, el: t.el, fx: 'slash' }, ev, { isCounter: true });
+  }
+
+  // 文心: a spell may go off a second time for free, if there is still something for it to do.
+  echo(a, sk, target, ev, id) {
+    if (!a.mods.echo || !sk.mp || !(sk.power || sk.heal)) return;
+    if (!this.live('enemy').length || this.rng() >= a.mods.echo) return;
+    ev.push({ type: 'setfx', target: a, text: '文心' });
+    this.doSkill(a, sk, target, ev, id, true);
+  }
+
+  // 贪狼: every action sharpens the next, up to a limit, for the rest of the fight.
+  sharpen(a, ev) {
+    if (!a.mods.rage || (a.rage || 0) >= a.mods.rageMax) return;
+    a.rage = Math.min(a.mods.rageMax, (a.rage || 0) + a.mods.rage);
+    ev.push({ type: 'setfx', target: a, text: '噬战', quiet: true });
   }
 
   apply(t, status, turns, ev) {
@@ -208,8 +249,15 @@ class Battle {
     const ev = [];
     a.guarding = false;
     switch (action.kind) {
-      case 'attack': this.doSkill(a, { name: '攻击', el: a.el, power: 1, target: 'enemy', fx: 'slash', pose: 'atk' }, action.target, ev); break;
-      case 'skill': this.doSkill(a, D.SKILLS[action.id], action.target, ev, action.id); break;
+      case 'attack':
+        this.doSkill(a, { name: '攻击', el: a.el, power: 1, target: 'enemy', fx: 'slash', pose: 'atk' }, action.target, ev);
+        this.sharpen(a, ev);
+        break;
+      case 'skill':
+        this.doSkill(a, D.SKILLS[action.id], action.target, ev, action.id);
+        this.echo(a, D.SKILLS[action.id], action.target, ev, action.id);
+        this.sharpen(a, ev);
+        break;
       case 'guard':
         a.statuses.guard = 1;
         a.mp = Math.min(a.maxMp, a.mp + Math.max(2, Math.round(a.maxMp * 0.12)));
@@ -217,7 +265,10 @@ class Battle {
         break;
       case 'item': this.doItem(a, action.id, action.target, ev); break;
       case 'seal': this.doSeal(a, action.target, ev); break;
-      case 'ult': this.doUlt(a, ev); break;
+      case 'ult':
+        this.doUlt(a, ev);
+        this.sharpen(a, ev);
+        break;
       case 'flee': {
         const ok = this.canFlee && this.rng() < 0.75;
         ev.push({ type: 'flee', actor: a, ok });
@@ -230,8 +281,8 @@ class Battle {
     return ev;
   }
 
-  doSkill(a, sk, chosen, ev, id) {
-    a.mp = Math.max(0, a.mp - this.mpCost(a, sk));
+  doSkill(a, sk, chosen, ev, id, free) {
+    if (!free) a.mp = Math.max(0, a.mp - this.mpCost(a, sk));
     ev.push({ type: 'use', actor: a, name: sk.name, pose: sk.pose, el: sk.el, fx: sk.fx, id, target: chosen, basic: !sk.mp && a.side === 'hero' });
     if (sk.power) {
       if (sk.target.indexOf('random') === 0) {

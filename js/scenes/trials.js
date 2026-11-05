@@ -78,6 +78,13 @@ class Trials {
       action: wanderOpen ? '去走' : null, badge: wanderOpen && s.wander.rolls > 0, onTap: () => game.go('wander'),
     });
     y += 66;
+    const gachaOpen = E.unlocked(s, 'gacha');
+    card('trial-gacha', m, y, w, 62, {
+      icon: 'letter', title: '星笺', locked: !gachaOpen,
+      text: gachaOpen ? `拆开天上寄来的信,里面是行装。现有 ${s.gacha.tickets} 封。` : '点亮第一颗星之后开放。',
+      action: gachaOpen ? '去拆' : null, badge: gachaOpen && s.gacha.tickets > 0, onTap: () => game.go('gacha', { from: 'trials' }),
+    });
+    y += 66;
     // Daily errands
     const d = Daily.ensure(s, day);
     const rows = W_.DAILY_TASKS.length;
@@ -99,7 +106,7 @@ class Trials {
     });
     const canB = Daily.bonusReady(s, day);
     ui.button('daily-bonus', m + 8, ry + 2, w - 16, 24, {
-      label: d.bonus ? '今日大礼已领' : `日课大礼 +${W_.DAILY_BONUS.dust} 星砂`, kind: canB ? 'jade' : 'normal', disabled: !canB, sound: null,
+      label: d.bonus ? '今日大礼已领' : `日课大礼 +${W_.DAILY_BONUS.dust} 星砂 +${W_.DAILY_BONUS.tickets} 星笺`, kind: canB ? 'jade' : 'normal', disabled: !canB, sound: null,
       onTap: () => {
         Daily.claimBonus(s, day);
         store.persist();
@@ -200,7 +207,8 @@ class TowerScene {
     x = ui.iconNum('coin', ui.num(r.coin), x, py + 28, UI.gold);
     x = ui.iconNum('xp', ui.num(r.xp), x, py + 28, UI.jade);
     if (r.items.incense) x = ui.iconNum('incense', r.items.incense, x, py + 28);
-    if (r.spirits.length) ui.iconNum('spirit', r.spirits.length, x, py + 28, UI.violet);
+    if (r.spirits.length) x = ui.iconNum('spirit', r.spirits.length, x, py + 28, UI.violet);
+    if (r.tickets) ui.iconNum('letter', r.tickets, x, py + 28, UI.gold);
     ui.text(`驿站俸禄随天阶增长,现为每日 ${E.stipendAmount(s)} 星砂`, px + 10, py + 48, UI.dim);
     const auto = s.settings.auto;
     ui.button('tower-auto', px + 10, py + ph - 42, 76, 32, {
@@ -299,6 +307,7 @@ class WanderScene {
     if (r.haste) rows.push({ icon: 'wing', label: '御风', value: ui.dur(r.haste), valueColor: UI.jade });
     if (r.rolls) rows.push({ icon: 'dice', label: '多掷一次', value: '+' + r.rolls });
     if (r.lapped) rows.push({ icon: 'star', label: '走完一圈', value: `+${Wander.LAP_DUST} 星砂`, valueColor: UI.gold });
+    if (r.lapped) rows.push({ icon: 'letter', label: '路上收到星笺', value: `×${Wander.LAP_TICKETS}`, valueColor: UI.gold });
     audio.sfx(r.lapped ? 'star' : 'coin');
     this.line = r.line;
     O.modal({ title: T.name, text: T.desc + '。', rows, buttons: [{ label: '继续', kind: 'primary' }] });

@@ -109,6 +109,33 @@ const ICONS = {
     g.rect(7, 6, 2, 4, C.gold2);
     return g.outline();
   },
+  // Equipment as a whole, for lists and tab labels.
+  gear() {
+    const g = g16();
+    g.poly([[4, 3], [12, 3], [14, 7], [12, 9], [12, 14], [4, 14], [4, 9], [2, 7]], C.bronze);
+    g.poly([[8, 3], [12, 3], [14, 7], [12, 9], [12, 14], [8, 14]], C.bronze2);
+    g.line(6, 3, 8, 6, C.gold2);
+    g.line(10, 3, 8, 6, C.gold2);
+    g.rect(4, 10, 8, 2, C.gold);
+    return g.outline();
+  },
+  iron() {
+    const g = g16();
+    g.poly([[4, 6], [12, 6], [15, 13], [1, 13]], C.ice2);
+    g.poly([[4, 6], [12, 6], [13, 9], [3, 9]], C.ice);
+    g.rect(2, 12, 12, 1, C.blue2);
+    g.set(5, 7, C.white);
+    return g.outline();
+  },
+  // A star letter, the ticket for a draw.
+  letter() {
+    const g = g16();
+    g.rect(1, 4, 14, 10, C.paper2);
+    g.poly([[1, 4], [15, 4], [8, 10]], C.paper);
+    g.ell(8, 9, 2, 2, C.red);
+    g.set(8, 9, C.gold2);
+    return g.outline();
+  },
   event() {
     const g = g16();
     g.rect(6, 2, 4, 8, C.gold2);
@@ -394,6 +421,111 @@ function cropGrid(el, stage) {
 // Each element gets a colour; each relic family a shape.
 const EL_COLOR = { metal: C.ice, wood: C.jade3, water: C.blue3, fire: C.red3, earth: C.gold };
 
+// ---- Equipment ----
+// A shape per slot, painted in its set's colours. The outline and a glint show the rarity.
+const GEAR_SHAPE = {
+  blade(g, s) {
+    g.line(13, 2, 6, 9, s.a, 2);
+    g.line(13, 2, 7, 8, lit(s.a, 0.55));
+    g.line(3, 8, 7, 12, s.c);
+    g.line(4, 11, 2, 13, s.b, 2);
+    g.set(1, 14, s.c);
+  },
+  coat(g, s) {
+    g.poly([[4, 2], [12, 2], [14, 6], [12, 8], [12, 14], [4, 14], [4, 8], [2, 6]], s.a);
+    g.poly([[8, 2], [12, 2], [14, 6], [12, 8], [12, 14], [8, 14]], s.b);
+    g.line(6, 2, 8, 5, s.c);
+    g.line(10, 2, 8, 5, s.c);
+    g.rect(4, 9, 8, 2, s.c);
+    g.set(8, 10, lit(s.c, 0.6));
+  },
+  boots(g, s) {
+    g.poly([[5, 2], [10, 2], [10, 9], [14, 11], [14, 14], [4, 14], [5, 9]], s.a);
+    g.rect(5, 2, 5, 2, s.c);
+    g.rect(4, 13, 10, 1, s.b);
+    g.line(4, 6, 1, 4, s.c);
+    g.line(4, 8, 1, 7, s.c);
+    g.set(11, 12, lit(s.a, 0.5));
+  },
+  charm(g, s) {
+    g.line(8, 1, 8, 3, s.c);
+    g.ell(8, 7, 5, 4, s.a);
+    g.ell(8, 7, 2, 1, s.b);
+    g.set(5, 5, lit(s.a, 0.7));
+    g.line(8, 11, 8, 12, s.c);
+    g.line(6, 13, 6, 15, s.c);
+    g.line(8, 13, 8, 15, s.b);
+    g.line(10, 13, 10, 15, s.c);
+  },
+};
+const RARITY_EDGE = [C.ink, C.blue2, C.violet2, C.gold3];
+
+function gearIcon(slot, set, rar) {
+  const g = g16();
+  GEAR_SHAPE[slot](g, set);
+  g.outline(RARITY_EDGE[rar]);
+  if (rar >= 2) g.set(13, 1, rar === 3 ? C.gold2 : C.violet3);
+  if (rar === 3) {
+    g.set(1, 2, C.white);
+    g.set(14, 13, C.gold2);
+  }
+  return g;
+}
+
+// ---- Star letter cards ----
+const CARD_W = 46, CARD_H = 64;
+const CARD_FACE = [
+  { edge: C.paper3, fill: 0x2a2542, corner: C.paper2 },
+  { edge: C.blue, fill: 0x1c2a4a, corner: C.blue3 },
+  { edge: C.violet, fill: 0x2c1f4c, corner: C.violet3 },
+  { edge: C.gold3, fill: 0x3a2a1c, corner: C.gold2 },
+];
+
+function cardFrame(g, edge, fill, corner) {
+  g.rect(1, 0, CARD_W - 2, CARD_H, C.ink);
+  g.rect(0, 1, CARD_W, CARD_H - 2, C.ink);
+  g.rect(1, 1, CARD_W - 2, CARD_H - 2, edge);
+  g.rect(2, 2, CARD_W - 4, CARD_H - 4, fill);
+  [[2, 2], [CARD_W - 5, 2], [2, CARD_H - 5], [CARD_W - 5, CARD_H - 5]].forEach(([x, y]) => g.rect(x, y, 3, 3, corner));
+}
+
+function cardFront(rar) {
+  const g = new Grid(CARD_W, CARD_H);
+  const f = CARD_FACE[rar];
+  cardFrame(g, f.edge, f.fill, f.corner);
+  g.rect(5, 44, CARD_W - 10, 1, f.edge);
+  return g;
+}
+
+// The sealed side: a letter under a wax star.
+function cardBack() {
+  const g = new Grid(CARD_W, CARD_H);
+  cardFrame(g, C.gold3, C.blue2, C.gold);
+  for (let y = 6; y < CARD_H - 6; y += 4) {
+    for (let x = 6 + (y % 8 ? 2 : 0); x < CARD_W - 6; x += 4) g.set(x, y, 0x2c5494);
+  }
+  const cx = 23, cy = 32;
+  g.ell(cx, cy, 11, 11, C.ink2);
+  g.ell(cx, cy, 10, 10, C.red2);
+  g.ell(cx, cy, 8, 8, C.red);
+  g.poly([[cx, cy - 7], [cx + 2, cy - 2], [cx + 7, cy], [cx + 2, cy + 2], [cx, cy + 7], [cx - 2, cy + 2], [cx - 7, cy], [cx - 2, cy - 2]], C.gold2);
+  return g;
+}
+
+// The letter that hangs over the draw screen.
+function letterBig() {
+  const g = new Grid(44, 32);
+  g.rect(2, 3, 40, 27, C.paper2);
+  g.rect(2, 3, 40, 2, C.paper);
+  g.rect(2, 26, 40, 4, C.paper3);
+  g.poly([[2, 4], [42, 4], [22, 19]], C.paper3);
+  g.poly([[4, 4], [40, 4], [22, 17]], C.paper);
+  g.ell(22, 16, 6, 6, C.red2);
+  g.ell(22, 16, 5, 5, C.red);
+  g.poly([[22, 11], [23, 15], [27, 16], [23, 17], [22, 21], [21, 17], [17, 16], [21, 15]], C.gold2);
+  return g.outline(C.ink);
+}
+
 const RELIC_SHAPE = {
   pendant(g, c) {
     g.line(4, 1, 8, 6, C.paper3);
@@ -460,4 +592,4 @@ const DIGITS = {
   '+': ['000', '010', '111', '010', '000'], '-': ['000', '000', '111', '000', '000'],
 };
 
-module.exports = { ICONS, relicIcon, cropGrid, DIGITS, EL_COLOR };
+module.exports = { ICONS, relicIcon, gearIcon, cardFront, cardBack, letterBig, CARD_W, CARD_H, cropGrid, DIGITS, EL_COLOR };
