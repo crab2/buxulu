@@ -157,6 +157,18 @@ const TRAIN = {
 const TRAIN_MAX = 60;
 const trainCost = (lv) => Math.round((1200 * Math.pow(1.19, lv)) / 100) * 100;
 
+// Skill levels. Levels are paid in coins, as all progress is, and the hero has to grow into them.
+// Crossing into a new tier also changes how the skill looks when cast (core/skillfx.js).
+const SKILL_MAX = 10;
+const SKILL_STEP = 0.05; // damage or healing per level above the first
+const SKILL_CHANCE = 0.02; // chance of a side effect per level above the first
+const SKILL_REVIVE = 0.03; // health a revival restores per level above the first
+const SKILL_TIERS = [{ name: '初学', from: 1, css: '#a79fb8' }, { name: '小成', from: 4, css: '#7fd1a4' }, { name: '大成', from: 7, css: '#6fb0e0' }, { name: '圆满', from: 10, css: '#f7dd7a' }];
+const skillTier = (lv) => (lv >= 10 ? 3 : lv >= 7 ? 2 : lv >= 4 ? 1 : 0);
+// `learnAt` is the hero level that teaches the skill, so later skills cost more and open later.
+const skillCost = (learnAt, lv) => Math.round((1200 * (1 + learnAt * 0.25) * Math.pow(1.5, lv - 1)) / 100) * 100;
+const skillNeed = (learnAt, lv) => learnAt + lv * 2;
+
 const xpNeed = (lv) => 300 + 200 * lv + 120 * lv * lv + 50 * lv * lv * lv;
 
 // Road income per minute at a given enemy level.
@@ -207,4 +219,5 @@ const SHOP_LIST = ['pill', 'ether', 'seal', 'incense'];
 module.exports = {
   ELEMENTS, OVERCOMES, GENERATES, elementMult, STATUS, SKILLS, HEROES, HERO_ORDER, MAX_LEVEL, MONSTERS, ITEMS,
   TRAIN, TRAIN_MAX, trainCost, xpNeed, coinPerMin, xpPerMin, RANKS, rankFor, RELICS, relicKey, relicDesc, REFINE_FAMILY, SHOP_LIST,
+  SKILL_MAX, SKILL_STEP, SKILL_CHANCE, SKILL_REVIVE, SKILL_TIERS, skillTier, skillCost, skillNeed,
 };

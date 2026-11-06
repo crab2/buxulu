@@ -15,6 +15,7 @@ const Wander = require('../js/systems/wander.js');
 const Daily = require('../js/systems/daily.js');
 const Gear = require('../js/systems/gear.js');
 const Gacha = require('../js/systems/gacha.js');
+const Skills = require('../js/systems/skills.js');
 const F = require('../js/data/gear.js');
 const L = require('../js/systems/ledger.js');
 const { CHAPTERS, FLAT } = require('../js/data/chapters.js');
@@ -166,6 +167,7 @@ function spendDust(s, now, rng, o, day) {
  * o.keen      does the player also climb the tower by hand?
  * o.noGear    ignores equipment completely
  * o.noDraw    uses equipment from the road and the forge, but never opens a star letter
+ * o.noSkills  never buys a skill level
  * o.buyDust   star letters bought with Stardust per day
  * o.buyCoin   star letters bought with coins per day
  */
@@ -207,6 +209,7 @@ function run(seed, o) {
       // Equipment and relics first: a share of the coins goes there, then the rest to training.
       tendGear(s, o, day);
       refineWhatYouCan(s, now);
+      if (!o.noSkills) Skills.autoUpgrade(s);
       E.autoTrain(s);
       Daily.mark(s, 'train', day);
       if (o.active) doActivities(s, now, rng, day, o.keen);
@@ -269,6 +272,7 @@ const PROFILES = {
   // How the equipment and the draw change things, against the no-WeRun player above.
   noGear: { label: 'no WeRun, plays the activities, ignores equipment', steps: 0, active: true, keen: true, noGear: true },
   noDraw: { label: 'no WeRun, plays the activities, never opens a star letter', steps: 0, active: true, keen: true, noDraw: true },
+  noSkills: { label: 'no WeRun, plays the activities, never levels a skill', steps: 0, active: true, keen: true, noSkills: true },
   walkDraw: { label: 'typical walker 7,000/day, spends Stardust on star letters', steps: 7000, active: true, keen: true, buyDust: 5 },
   maxDraw: { label: 'very keen walker 20,000/day, buys every star letter allowed', steps: 20000, active: true, keen: true, buyDust: F.TICKET_DUST_DAILY, buyCoin: F.TICKET_COIN_DAILY },
 };

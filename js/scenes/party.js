@@ -8,6 +8,7 @@ const store = require('../systems/store.js');
 const E = require('../systems/economy.js');
 const G = require('../data/game.js');
 const P = require('../systems/party.js');
+const Skills = require('../systems/skills.js');
 const O = require('./overlays.js');
 const nav = require('./nav.js');
 const GearUI = require('./gear.js');
@@ -31,7 +32,7 @@ function relicIcon(item) {
 class Party {
   constructor(p) {
     this.p = p;
-    this.hero = 'cen';
+    this.hero = p.hero || 'cen';
     this.scroll = 0;
     this.maxScroll = 0;
     this.fx = new Particles();
@@ -91,6 +92,13 @@ class Party {
     ui.text(`气血 ${ui.num(st.hp)}  灵力 ${st.mp}`, tx, y + 46, UI.text);
     ui.text(`攻 ${st.atk}  防 ${st.def}  速 ${Math.round(st.spd)}`, tx, y + 60, UI.dim);
     y += 84;
+    // Skills have their own screen, and sit up here so they are never lost at the bottom of a long list.
+    const ready = Skills.readyCount(s, this.hero);
+    ui.button('skills-open', m, y, w, 28, {
+      icon: 'flame', label: ready ? `术法 · ${ready} 门可以升级` : '术法', kind: ready ? 'jade' : 'normal', badge: ready > 0,
+      onTap: () => game.go('skills', { hero: this.hero }, true),
+    });
+    y += 32;
     y = GearUI.drawPanel(s, this.hero, y, m, w);
     // Training
     ui.panel(m, y, w, 30 * 4 + 56);
@@ -144,21 +152,6 @@ class Party {
       }
     });
     y += 66;
-    // Skills
-    const allSkills = def.skills;
-    const sh = 28 + allSkills.length * 28;
-    ui.panel(m, y, w, sh);
-    ui.text('术法', m + 10, y + 7, UI.gold);
-    allSkills.forEach(([id, need2], i) => {
-      const sk = G.SKILLS[id];
-      const x = m + 10;
-      const yy = y + 23 + i * 28;
-      const known = h.lv >= need2;
-      ui.text(sk.name, x, yy, known ? (sk.el ? G.ELEMENTS[sk.el].css : UI.jade) : UI.faint);
-      ui.text(known ? `灵力 ${sk.mp}` : `Lv ${need2}`, W - m - 10, yy, UI.dim, { align: 'r' });
-      ui.text(sk.desc, x, yy + 13, known ? UI.dim : UI.faint);
-    });
-    y += sh + 8;
     this.maxScroll = Math.max(0, y + this.scroll - this.bottom);
     this.scroll = Math.min(this.scroll, this.maxScroll);
     ui.endClip();

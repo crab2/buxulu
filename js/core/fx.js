@@ -48,6 +48,24 @@ class Particles {
       this.add({ x: x + i, y: y - i, vx: 0, vy: 0, g: 0, life: 0.13 + (12 - Math.abs(i)) * 0.006, max: 0.3, c: cols[Math.abs(i) < 5 ? 0 : 1], s: Math.abs(i) < 7 ? 2 : 1 });
     }
   }
+  // Motes drawn in from all around to one point, the moment before a skill goes off.
+  gather(x, y, kind, n, radius, life) {
+    const cols = EL_FX[kind] || EL_FX.none;
+    for (let i = 0; i < n; i++) {
+      const a = Math.random() * Math.PI * 2;
+      const r = radius * (0.6 + Math.random() * 0.4);
+      const t = life * (0.7 + Math.random() * 0.3);
+      this.add({ x: x + Math.cos(a) * r, y: y + Math.sin(a) * r * 0.8, vx: (-Math.cos(a) * r) / t, vy: (-Math.sin(a) * r * 0.8) / t, g: 0, life: t, max: t, c: cols[i % cols.length], s: i % 4 === 0 ? 2 : 1 });
+    }
+  }
+  // Falling from above across a span: embers, petals, golden light.
+  rain(x0, x1, y, kind, n, speed, spread) {
+    const cols = EL_FX[kind] || EL_FX.none;
+    for (let i = 0; i < n; i++) {
+      const v = speed * (0.7 + Math.random() * 0.6);
+      this.add({ x: x0 + Math.random() * (x1 - x0), y: y - Math.random() * spread, vx: -6 - Math.random() * 10, vy: v, g: 0, wob: 6, life: 0.5 + Math.random() * 0.5, max: 1, c: cols[i % cols.length], s: i % 3 === 0 ? 2 : 1 });
+    }
+  }
   beam(x0, y0, x1, y1, kind, n) {
     const cols = EL_FX[kind] || EL_FX.none;
     for (let i = 0; i < n; i++) {

@@ -1,6 +1,7 @@
 // Turns save data into combat units. Pure logic with no dependency on the WeChat runtime.
 const D = require('../data/game.js');
 const Gear = require('./gear.js');
+const Skills = require('./skills.js');
 
 function relicMods(heroSave, save) {
   const mods = {};
@@ -43,10 +44,14 @@ function learned(id, lv) {
 function heroUnit(save, id, index) {
   const s = heroStats(save, id);
   const def = D.HEROES[id];
+  const skills = learned(id, save.heroes[id].lv);
+  // Each skill at the level this hero has trained it to. Combat reads these rather than the base table.
+  const sk = {};
+  skills.forEach((k) => { sk[k] = Skills.at(k, Skills.levelOf(save, id, k)); });
   return {
     id, key: id + index, side: 'hero', name: def.name, el: def.el, lv: save.heroes[id].lv,
     maxHp: s.hp, hp: s.hp, maxMp: s.mp, mp: s.mp, atk: s.atk, def: s.def, spd: s.spd,
-    mods: s.mods, skills: learned(id, save.heroes[id].lv), statuses: {}, ct: Math.random() * 30, alive: true,
+    mods: s.mods, skills, sk, statuses: {}, ct: Math.random() * 30, alive: true,
   };
 }
 
@@ -55,9 +60,10 @@ function enemyUnit(id, lv, index) {
   const m = D.MONSTERS[id];
   // Enemies gain a little extra with level, so party level keeps its meaning all the way up the road.
   const hard = 1 + 0.022 * lv;
-  // Equipment adds up along the road, so the road keeps pace with it. tests/simulate.js sets this figure:
-  // it holds the published pace for a player who uses equipment, and the first region barely changes.
-  const geared = 1 + 0.007 * lv;
+  // Equipment and skill levels add up along the road, so the road keeps pace with them. tests/simulate.js
+  // sets this figure: it holds the published pace for a player who uses both, and the first region barely
+  // changes.
+  const geared = 1 + 0.013 * lv;
   const hp = Math.round((52 + 25 * lv) * m.hp * hard * geared);
   return {
     id, key: id + index, side: 'enemy', name: m.name, el: m.el, lv, def_: m,
@@ -74,7 +80,8 @@ function enemyUnit(id, lv, index) {
 function power(save) {
   return joined(save).reduce((sum, id) => {
     const st = heroStats(save, id);
-    return sum + st.hp * 0.3 + st.atk * 4 + st.def * 3 + st.spd * 4;
+    const trained = learned(id, save.heroes[id].lv).reduce((n, k) => n + Skills.levelOf(save, id, k) - 1, 0);
+    return sum + st.hp * 0.3 + st.atk * 4 + st.def * 3 + st.spd * 4 + trained * 6;
   }, 0);
 }
 

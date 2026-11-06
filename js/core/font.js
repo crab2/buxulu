@@ -3,6 +3,8 @@
 // and sixteen of them were most of the game's memory. A glyph with an outline is baked as one image,
 // so outlined text needs one draw per character rather than five.
 const DATA = require('../data/fontdata.js');
+const atlas = require('./atlas.js');
+const { Grid } = require('./paint.js');
 
 const CELL = DATA.h;
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
@@ -158,18 +160,37 @@ function draw(ctx, str, x, y, color, outline) {
   }
 }
 
-// Scaled text (logo and big labels): the same pixels, blown up with nearest-neighbour.
+// A string as a pixel grid in one colour, with room around it for an outline.
+function grid(str, color, pad) {
+  pad = pad || 0;
+  const g = new Grid(width(str) + pad * 2, CELL + pad * 2);
+  let cx = pad;
+  for (const ch of String(str)) {
+    const shape = glyph(ch);
+    for (let y = 0; y < CELL; y++) {
+      for (let x = 0; x < shape.cw; x++) if (shape.rows[y][x]) g.set(cx + x, y + pad, color);
+    }
+    cx += shape.w;
+  }
+  return g;
+}
+
+// Scaled text (logo and big labels). Each big glyph is baked once, pixel by pixel, rather than enlarged
+// at draw time, so it stays crisp on a runtime that filters scaled images whatever it is told.
+const bigGlyphs = new Map();
 function drawBig(ctx, str, x, y, color, k) {
-  const style = styleFor(color);
   let cx = Math.round(x);
+  y = Math.round(y);
   for (const ch of String(str)) {
     const g = glyph(ch);
-    let s = style.get(ch);
+    const key = color + '|' + k + '|' + ch;
+    let s = bigGlyphs.get(key);
     if (!s) {
-      s = bake(g, color);
-      style.set(ch, s);
+      const small = grid(ch, parseInt(color.slice(1), 16));
+      s = atlas.add(small.resized(small.w * k, small.h * k));
+      bigGlyphs.set(key, s);
     }
-    ctx.drawImage(pages[s.page].cv, s.x, s.y, g.cw, CELL, cx, Math.round(y), g.cw * k, CELL * k);
+    if (s.cv) ctx.drawImage(s.cv, s.sx, s.sy, s.tw, s.th, cx + s.ox, y + s.oy, s.tw, s.th);
     cx += g.w * k;
   }
 }
@@ -228,4 +249,4 @@ function purge() {
 
 const stats = () => ({ pages: pages.filter(Boolean).length, pixels: pages.filter(Boolean).length * PAGE_W * PAGE_H });
 
-module.exports = { CELL, width, draw, drawBig, wrap, missing, hasGlyph: (ch) => glyphs.has(ch), purge, stats };
+module.exports = { CELL, width, draw, drawBig, grid, wrap, missing, hasGlyph: (ch) => glyphs.has(ch), purge, stats };

@@ -208,7 +208,9 @@ class CardReveal {
     const n = this.cards.length;
     const perRow = Math.min(5, n);
     const rows = Math.ceil(n / perRow);
-    const gapX = 4, gapY = 6;
+    // Budget phones are only 240 wide, where five cards and the usual gap would run off both edges.
+    const gapX = perRow > 1 ? Math.max(0, Math.min(4, Math.floor((W - 4 - perRow * CARD_W) / (perRow - 1)))) : 0;
+    const gapY = 6;
     const totalW = perRow * CARD_W + (perRow - 1) * gapX;
     const totalH = rows * CARD_H + (rows - 1) * gapY;
     const top = Math.max(D.contentTop + 22, Math.round(H * 0.42 - totalH / 2));

@@ -11,7 +11,7 @@ const Gear = require('./gear.js');
 const { NODE_INDEX, CHAPTERS } = require('../data/chapters.js');
 
 function defaultSave() {
-  const hero = (joined) => ({ lv: 1, xp: 0, joined, train: { hp: 0, atk: 0, def: 0, spd: 0 }, relics: [null, null], outfit: null, gear: { blade: null, coat: null, boots: null, charm: null } });
+  const hero = (joined) => ({ lv: 1, xp: 0, joined, train: { hp: 0, atk: 0, def: 0, spd: 0 }, skillLv: {}, relics: [null, null], outfit: null, gear: { blade: null, coat: null, boots: null, charm: null } });
   return {
     v: 2, seq: 0,
     coin: 0,

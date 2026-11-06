@@ -15,6 +15,7 @@ All code, art, story and music are original. Art is drawn in code, and music is 
 | **驿传 Courier errands** | Match hired couriers to letters by element and trait, and pick errand lengths to suit when you will be back. Replies bring coins, herbs, spirits and letters from people you met. | Yes |
 | **药圃 Herb garden** | A 3×3 plot where neighbours matter: generating elements raise a crop's yield and overcoming ones lower it. | Yes |
 | **膳房 Kitchen** | Cook herbs into supplies, or into an 8-hour meal that boosts coins, experience, marching or spirit finds. | The meal keeps working |
+| **术法 Skills** | Level each skill from 1 to 10 with coins. Crossing into a new tier also changes how the skill looks when cast, and any tier can be previewed before you reach it. | — |
 | **行装 Equipment** | Four slots per hero, four rarities and seven sets. Upgrade pieces with coins and iron, and wear 2 or 4 of a set for its bonus and special effect. | The road finds pieces and iron |
 | **星笺 Star letters** | The draw: open sealed letters, flip the cards, and get equipment. The odds are published in the game and bad luck has a hard limit. | The road brings a slow trickle of letters |
 | **星炉 Star furnace** | Refine two captured spirits into one of 15 relics in 3 ranks. Combinations are discovered by trying them. | Yes |
@@ -62,19 +63,20 @@ No road node, gate, story beat or activity costs Stardust or checks real steps, 
 
 | Player | Days |
 |---|---|
-| No WeRun, opens once a day | 39 |
-| No WeRun, only collects, trains and taps the one-tap equipment buttons | 30 |
-| **No WeRun, plays the activities** | **19** |
-| Same player, never opens a star letter | 20 |
+| No WeRun, opens once a day | 41 |
+| No WeRun, only collects, trains and taps the one-tap buttons | 29 |
+| **No WeRun, plays the activities** | **20** |
+| Same player, never opens a star letter | 22 |
+| Same player, never levels a skill | 25 |
 | Same player, ignores equipment altogether | 31 |
-| Walks 4,000 steps a day | 17 |
+| Walks 4,000 steps a day | 18 |
 | **Walks 7,000 steps a day** | **16** |
 | Walks 12,000 steps a day | 15 |
-| Walks 20,000 steps a day | 11 |
-| Walks 7,000 steps a day, but spends the Stardust on star letters | 20 |
+| Walks 20,000 steps a day | 13 |
+| Walks 7,000 steps a day, but spends the Stardust on star letters | 21 |
 | Walks 20,000 steps a day and buys every letter allowed | 14 |
 
-A single run can differ from these averages by several days, so small gaps between rows mean little. In a larger sample of 24 runs, never opening a letter cost about 15% (20.5 days against 17.8).
+A single run can differ from these averages by several days, so small gaps between rows mean little. In a larger sample of 24 runs, never opening a letter cost about 8% (21.8 days against 20.1).
 
 The turn-based version this replaced took about 16 days with steps and about 58 without, a 3.6× gap. The gap between a no-WeRun player and a typical walker is now about 1.2×, and how much you play matters more than how far you walk. Stardust spent on letters is slower than Stardust spent on speed, so walking can't be turned into a strength shortcut.
 
@@ -162,7 +164,70 @@ The rules live in `js/systems/ledger.js`. The cloud function runs an identical c
 - **Letters come from play:** the daily errand bonus (3), the Sky Stair (1 every 5 floors, 3 every 10), a lap of the wander board, lit stars and a slow trickle on the road. Coins buy up to 5 a day and Stardust up to 10.
 - **A draw is saved before any card turns,** so closing the game mid-reveal neither loses nor rerolls anything.
 
-**Enemies got a little stronger to pay for this.** HP and attack now scale by an extra 0.7% per level, which is +4% at the first boss and +31.5% at the last. Without it, equipment nearly halved the game, because pace is very sensitive to party strength. Old saves load with their progress intact and receive the starter pair and the letters for every star already lit, but a party with no equipment on will find the later road harder until it gears up.
+**Enemies got a little stronger to pay for this.** HP and attack scale by an extra 0.7% per level for equipment, and another 0.6% for skill levels (see below). Without it, equipment nearly halved the game, because pace is very sensitive to party strength. Old saves load with their progress intact and receive the starter pair and the letters for every star already lit, but a party with no equipment on will find the later road harder until it gears up.
+
+## Skill levels
+
+Each of the 15 hero skills levels from 1 to 10 on the 术法 screen, opened from the party screen. Levels are paid in coins like all other progress, never Stardust, and the hero has to grow into them.
+
+| Each level above the first gives | |
+|---|---|
+| Damage or healing | +5% |
+| Chance of a side effect, such as burning | +2% |
+| Health restored by a revival | +3% |
+| Skills that only protect (岩盾, 铜躯) | Last one turn longer at each new tier |
+| Skills with a side effect, at 圆满 | The effect lasts one turn longer |
+
+- **Cost** grows 1.5× per level, and later skills cost more: 1,500 coins for a first skill's first level, 38,400 for its last, and about 4.6 million coins for everything.
+- **Hero level** gates it. A skill taught at level *L* can reach level *n* once the hero is level *L* + 2(*n* − 1). The first skills can reach 10 around hero level 19, and the latest can't until level 44, which is after the story.
+- **The road uses them too.** Levels change real combat, so they speed up the idle march as well as hand-played fights.
+- **Old saves** keep their progress and start every skill at level 1.
+
+**Paying for it.** Skill levels as first drafted cut the story from 19 days to 11, so the numbers were swept against the balance simulation. Enemy HP and attack now gain an extra 1.3% per level in total, which is +8% at the first boss and +58.5% at the last, on top of the 2.2% and 1.7% they always had. A player who uses skills lands on about the same pace as before, and one who never levels a skill takes about a quarter longer.
+
+### What each tier looks like
+
+The look follows the tier, and it comes from `js/core/skillfx.js` and `js/scenes/cast.js`. The preview stage on the 术法 screen plays the same code as a real fight, for any tier, so a player can see what they are working toward.
+
+| Tier | Levels | What it adds |
+|---|---|---|
+| 初学 | 1 to 3 | A clean hit in the element's own shape |
+| 小成 | 4 to 6 | A second beat: a crossing cut, a ripple, a ring of flame. A sigil turns under the caster |
+| 大成 | 7 to 9 | The field dims and the skill reaches out of the sky or the ground. Melee skills cross the field with afterimages, and heavy blows hold for a moment |
+| 圆满 | 10 | A cut-in with the hero's portrait and the skill's name, then a field-wide flourish |
+
+| Element | Signature | At its peak |
+|---|---|---|
+| Metal | Crescent cuts, then falling spirit swords | Five swords and a beam of light, with a slash across the whole field |
+| Fire | A fireball, then flame tongues and a pillar | Five tongues of flame and burning embers falling everywhere |
+| Water | A water bolt, then ripples and a column | A surge rolling across the field, and ice shards around the target |
+| Wood | Vines rising around the target, then a bloom | A great flower and a storm of petals |
+| Earth | Rock spikes and ground cracks | A boulder falls from the sky, and cracks run the length of the field |
+| Healing | Rising sparkles, then a pillar of light | A golden lotus and light raining on the party |
+| Protection | A dome closes over each ally, then standing stones | Two domes and a beam of light |
+
+Enemies stay plain, with one exception: the telegraphed blow of a boss plays at 大成, because it is the moment the player was warned about. On the road screen, blows reflect each hero's best tier but stop short of the 圆满 display, because that scene runs for hours with nobody watching.
+
+A skill's choreography takes 0.4 to 1.3 seconds at level 1 and 1.3 to 2.6 seconds at level 10, before the fight's speed setting. The busiest frame of any skill draws about 700 things, against a budget of 1,200 that the tests enforce.
+
+## A sharp picture on phones
+
+The game draws to a low-resolution buffer, around 293×633, and enlarges it by a whole number. Enlarging was done with `drawImage` and `imageSmoothingEnabled = false`, which is only a request. Desktop Chromium honours it, so WeChat DevTools looks sharp. A runtime that filters anyway gives a blurry picture, and on a stand-in for such a phone 10.5% of the screen's pixels came out wrong.
+
+Three things now keep the picture square whatever the runtime does:
+
+- **WebGL shows the frame.** The buffer is uploaded as a texture with `NEAREST` filtering, which the GPU follows on every device. A canvas keeps the first kind of context it is given, so a throwaway canvas proves the whole path on this device first, down to the exact pixels, and anything short of that falls back to 2D rather than risk a black screen.
+- **Nothing kept on screen is enlarged at draw time.** Damage digits, big text and doubled icons are baked at their final size. Only sizes that change every frame, such as a card turning over, are still scaled by the runtime.
+- **The canvas matches the panel.** Android reports whole CSS pixels with a fractional ratio, so a 1080-wide panel at 2.75 comes back as 393, which multiplies to 1080.75. A canvas one pixel too wide gets resampled by the phone's compositor, so the width now snaps to the panel's real size (`js/core/sizing.js`).
+
+**To check a phone:** the bottom of the settings screen says what it ended up with, for example `webgl x4 293x633` and `1170x2532 pr3 nearest`.
+
+| Part | Meaning |
+|---|---|
+| `webgl` or `2d:reason` | How the frame reaches the screen. `2d` means the self-test failed, and the reason says why |
+| `x4 293x633` | The whole-number scale and the buffer size |
+| `1170x2532 pr3` | The canvas size and the ratio WeChat reported |
+| `nearest` or `smooth` | Whether this phone's 2D canvas obeys the smoothing flag. `smooth` with `webgl` means the fix is what is keeping it sharp |
 
 ## Art: drawn in code, on a budget
 
@@ -179,13 +244,13 @@ There are no image files. Every sprite and backdrop is authored in code and bake
 
 | | Turn-based version | Now |
 |---|---|---|
-| Canvases | 90 | 25 |
-| Canvas memory | 28.3 MB | 9.9 MB |
-| `fillRect` calls per frame, worst screen | 1,498 | 225 |
-| `drawImage` calls per frame, worst screen | 306 | 275 |
-| Package size | 1.47 MB | 1.73 MB |
+| Canvases | 90 | 26 |
+| Canvas memory | 28.3 MB | 10.9 MB |
+| `fillRect` calls per frame, worst screen | 1,498 | 215 |
+| `drawImage` calls per frame, worst screen | 306 | 277 |
+| Package size | 1.47 MB | 1.79 MB |
 
-There is far more art on screen than before, and the package grew by only about 0.3 MB, since all of it is code.
+There is far more art on screen than before, and the package grew by only about 0.3 MB, since all of it is code. The per-frame figures count what is drawn to the game's own buffer, so baking a sprite the first time it appears, a one-off on another canvas, doesn't count. They were taken outside skill casts, which briefly go higher (see "What each tier looks like").
 
 How:
 - **Glyph cache.** The font used to bake one 546×546 canvas per text colour, which was 19 MB on its own. Glyphs now share two small pages, and an outlined glyph is one draw rather than five.
@@ -215,12 +280,13 @@ Only you can do these steps, because they need your WeChat account.
 ```
 game.js, game.json, project.config.json   Mini Game entry and configuration
 js/config.js          Cloud environment setting
-js/core/              Canvas scaling, atlas, glyph cache, scenery pool, input, scenes, audio, particles
+js/core/              Canvas scaling, screen output, atlas, glyph cache, scenery pool, input, scenes, audio, particles,
+                      skill effects
 js/art/               All sprites and scenery, drawn in code
 js/data/              Skills, monsters, relics, chapters, story script, activity content (world.js),
                       equipment, sets and draw odds (gear.js)
-js/systems/           Rules: idle march, battle, economy, boosts, equipment, draw, dispatch, garden, tower,
-                      wander, daily, wardrobe, ledger, steps client, save
+js/systems/           Rules: idle march, battle, economy, boosts, skill levels, equipment, draw, dispatch, garden,
+                      tower, wander, daily, wardrobe, ledger, steps client, save
 js/scenes/            Screens
 cloudfunctions/       stepExchange and cloudSave
 assets/audio/         Generated MP3s (1.2 MB)
@@ -228,7 +294,7 @@ tools/                Font subsetter, audio generator, web preview bundler and w
 tests/                Offline tests, balance simulation, browser end-to-end tests
 ```
 
-The package is about 1.7 MB, against WeChat's 4 MB main package limit. `packOptions` in `project.config.json` keeps `tools/`, `tests/`, `dist/` and `node_modules/` out of the upload.
+The package is about 1.8 MB, against WeChat's 4 MB main package limit. `packOptions` in `project.config.json` keeps `tools/`, `tests/`, `dist/` and `node_modules/` out of the upload.
 
 Saves from the turn-based version upgrade automatically. Progress and Stardust carry over, and training tiers double, because each tier is now half as strong.
 
@@ -243,9 +309,9 @@ python3 tools/build_font.py path/to/fusion-pixel-12px-proportional-zh_hans.bdf
 ## Tests
 
 ```bash
-npm test               # step rules, cloud functions, the march, every activity, equipment, the draw, combat, content
+npm test               # step rules, cloud functions, the march, every activity, equipment, skill levels, the draw, combat, content
 npm run e2e            # the real game in headless Chromium, driven by pointer events
-node tests/simulate.js # balance report across eleven kinds of player
+node tests/simulate.js # balance report across twelve kinds of player
 ```
 
 The end-to-end suite needs a Chromium build. It finds one in the Playwright cache, or set `CHROME_BIN`.
@@ -255,6 +321,7 @@ The end-to-end suite needs a Chromium build. It finds one in the Playwright cach
 Everything above ran against a browser stand-in for the WeChat runtime (`tools/wx-shim.js`) and a fake cloud backend. These still need a real run:
 
 - The game on a real WeChat client, on iOS and Android, including time away with the game truly closed.
+- **The sharpness fix on a real phone.** The blur was reproduced on a stand-in that ignores the smoothing flag, and no source could confirm that this is what WeChat's runtime does. The fix doesn't depend on it, and the settings screen reports what the phone actually did. Still to measure there: the cost of uploading the frame to WebGL every frame, and whether the share card looks right.
 - The real WeRun, privacy and cloud calls. The API shapes follow the official docs, but no live call has been made.
 - `putImageData`, `multiply` blending, `wx.setPreferredFramesPerSecond`, `wx.setKeepScreenOn` and `wx.onMemoryWarning` on real devices. Each has a feature check or fallback, so a gap should mean a plainer or slower result rather than a crash.
 - Audio. The files decode and aren't silent or clipped, but nobody has listened to them yet.

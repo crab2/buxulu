@@ -13,6 +13,17 @@
   const measured = rectOf();
   const base = measured.width > 50 && measured.height > 50 ? { width: measured.width, height: measured.height } : { width: 390, height: 844 };
   const params = new URLSearchParams(location.search);
+  // Behaviour a real phone may have and desktop Chromium does not, so tests can see what the game does there.
+  // smoothing=ignored: the 2D canvas filters however it is asked. webgl=none: no WebGL at all.
+  // webgl=broken: WebGL starts, but uploading a canvas does nothing.
+  if (params.get('smoothing') === 'ignored') {
+    Object.defineProperty(CanvasRenderingContext2D.prototype, 'imageSmoothingEnabled', { get: () => true, set() {} });
+  }
+  if (params.get('webgl') === 'none') {
+    const realContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (type, o) { return type === 'webgl' ? null : realContext.call(this, type, o); };
+  }
+  if (params.get('webgl') === 'broken') WebGLRenderingContext.prototype.texImage2D = function () {};
   const handlers = { start: [], move: [], end: [], cancel: [], show: [], hide: [] };
   let first = true;
   let privacyHandler = null;

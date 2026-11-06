@@ -37,6 +37,12 @@ function imgScaled(s, x, y, w, h) {
   if (s.tw !== undefined) {
     if (!s.cv) return;
     const kx = w / s.w, ky = h / s.h;
+    // A resting whole-number enlargement gets its own baked copy. Only sizes that change every frame,
+    // like a card turning over, are left for the runtime to scale.
+    if (kx === ky && kx >= 2 && Number.isInteger(kx) && s.resized) {
+      img(s.resized(w, h), x, y);
+      return;
+    }
     ctx.drawImage(s.cv, s.sx, s.sy, s.tw, s.th, Math.round(x + s.ox * kx), Math.round(y + s.oy * ky), Math.max(1, Math.round(s.tw * kx)), Math.max(1, Math.round(s.th * ky)));
   } else ctx.drawImage(s, Math.round(x), Math.round(y), Math.round(w), Math.round(h));
 }
@@ -112,14 +118,14 @@ function paraHeight(str, w, lh) {
 
 // Number written with the chunky damage digits, centred on x.
 function numberBig(str, x, y, color, k) {
-  const sheet = art.digits(color);
   k = k || 2;
+  const sheet = art.digits(color, k);
   const s = String(str);
   const adv = 4 * k;
   let cx = Math.round(x - (s.length * adv) / 2);
   for (const ch of s) {
     const i = art.DIGIT_ORDER.indexOf(ch);
-    if (i >= 0) ctx.drawImage(sheet.cv, sheet.sx + i * 6 - sheet.ox, sheet.sy, 5, sheet.th, cx, Math.round(y), 5 * k, sheet.th * k);
+    if (i >= 0) ctx.drawImage(sheet.cv, sheet.sx + i * 6 * k - sheet.ox, sheet.sy, 5 * k, sheet.th, cx, Math.round(y), 5 * k, sheet.th);
     cx += adv;
   }
 }

@@ -2239,6 +2239,249 @@ test('all displayed characters exist in the bundled font', () => {
   assert.strictEqual(Array.from(missing).join(''), '');
 });
 
+// ---- Screen sizing ----
+const Sizing = require('../js/core/sizing.js');
+const { Grid } = require('../js/core/paint.js');
+
+test('the canvas matches the real panel, even where Android reports a fractional ratio', () => {
+  // Each row is what WeChat reports and the panel it is really on. One pixel off gets the whole picture resampled.
+  [
+    [393, 873, 2.75, 1080, 2400], // 1080x2400 at 2.75, which multiplies to 1080.75 x 2400.75
+    [411, 914, 2.625, 1080, 2400], // 1078.875 x 2399.25
+    [411, 914, 3.5, 1440, 3200], // 1438.5 x 3199
+    [360, 800, 3, 1080, 2400],
+    [390, 844, 3, 1170, 2532], // iPhone: whole ratios are exact, including panels that are not round numbers
+    [393, 852, 3, 1179, 2556],
+    [375, 667, 2, 750, 1334],
+    [445, 989, 2.75, 1224, 2720], // not a multiple of ten, and too far from one to be mistaken for it
+  ].forEach(([w, h, pr, physW, physH]) => {
+    const f = Sizing.fit(w, h, pr);
+    assert.deepStrictEqual([f.physW, f.physH], [physW, physH], `${w}x${h} at ${pr}`);
+  });
+});
+
+test('every phone gets a whole-number scale that covers the screen with whole blocks', () => {
+  // Real phones, as WeChat reports them. A budget 720-wide Android is the narrowest layout there is, at 240.
+  [
+    [320, 568, 2], [375, 667, 2], [414, 736, 3], [375, 812, 3], [414, 896, 2], [414, 896, 3], [390, 844, 3], [428, 926, 3],
+    [393, 852, 3], [430, 932, 3], [402, 874, 3], [440, 956, 3],
+    [360, 640, 3], [360, 800, 2], [360, 780, 3], [393, 873, 2.75], [412, 915, 2.625], [412, 892, 3.5], [384, 854, 2.8125], [411, 914, 3.5],
+  ].forEach(([w, h, pr]) => {
+    const f = Sizing.fit(w, h, pr);
+    assert.ok(Number.isInteger(f.scale) && f.scale >= 1, `scale ${f.scale}`);
+    assert.ok(f.W * f.scale >= f.physW && (f.W - 1) * f.scale < f.physW, `width of ${w}x${h} at ${pr}`);
+    assert.ok(f.H * f.scale >= f.physH && (f.H - 1) * f.scale < f.physH, `height of ${w}x${h} at ${pr}`);
+    assert.ok(f.W >= 240, `${w}x${h} at ${pr} is only ${f.W} wide`);
+  });
+});
+
+test('resizing a sprite takes whole source pixels, so it can never invent a colour', () => {
+  const g = new Grid(4, 2);
+  g.rect(0, 0, 2, 2, 0xff0000);
+  g.rect(2, 0, 2, 2, 0x00ff00);
+  const big = g.resized(12, 6);
+  assert.strictEqual(big.get(5, 3), 0xff0000);
+  assert.strictEqual(big.get(6, 3), 0x00ff00);
+  assert.deepStrictEqual(Array.from(new Set(Array.from(big.d))).sort(), [0x00ff00, 0xff0000].sort());
+  assert.strictEqual(new Grid(3, 3).resized(6, 6).get(2, 2), -1, 'transparency stays transparent');
+});
+
+// ---- Skill levels ----
+const Skills = require('../js/systems/skills.js');
+
+const skillSave = (lv) => {
+  const s = E.defaultSave();
+  ['cen', 'ruo', 'zhuo'].forEach((id) => { s.heroes[id].joined = true; s.heroes[id].lv = lv; });
+  return s;
+};
+// Fixed dice, so that any difference between two fights comes from the skill.
+const fixedFight = (s, foes) => new Battle({ heroes: P.partyUnits(s), enemies: (foes || ['clay']).map((m, i) => P.enemyUnit(m, 10, i)), stars: 0, items: {}, rng: () => 0.5 });
+const hitOf = (ev) => ev.find((e) => e.type === 'hit').amount;
+
+test('every skill starts at level one, and a save from before skill levels loads with its progress', () => {
+  assert.deepStrictEqual(E.defaultSave().heroes.cen.skillLv, {});
+  const old = skillSave(30);
+  old.coin = 777;
+  old.progress.stars = 3;
+  ['cen', 'ruo', 'zhuo'].forEach((id) => { delete old.heroes[id].skillLv; });
+  const up = E.upgrade(JSON.parse(JSON.stringify(old)));
+  assert.strictEqual(up.coin, 777);
+  assert.strictEqual(up.progress.stars, 3);
+  assert.deepStrictEqual(up.heroes.ruo.skillLv, {});
+  assert.strictEqual(Skills.levelOf(up, 'ruo', 'mend'), 1);
+  assert.ok(Skills.upgrade(Object.assign(up, { coin: 1e6 }), 'cen', 'cut'), 'and the old save can level up');
+});
+
+test('tiers begin at levels 4, 7 and 10', () => {
+  const tiers = [];
+  for (let lv = 1; lv <= G.SKILL_MAX; lv++) tiers.push(G.skillTier(lv));
+  assert.deepStrictEqual(tiers, [0, 0, 0, 1, 1, 1, 2, 2, 2, 3]);
+  G.SKILL_TIERS.forEach((t, i) => assert.strictEqual(G.skillTier(t.from), i, t.name));
+});
+
+test('a level is paid in coins, never Stardust, and each one costs more than the last', () => {
+  const s = skillSave(60);
+  s.stardust = 12345;
+  G.HERO_ORDER.forEach((hero) => G.HEROES[hero].skills.forEach(([id, from]) => {
+    let last = 0;
+    for (let lv = 1; lv < G.SKILL_MAX; lv++) {
+      const cost = G.skillCost(from, lv);
+      assert.ok(cost > last, `${id} level ${lv}`);
+      last = cost;
+      s.coin = cost;
+      assert.ok(Skills.upgrade(s, hero, id), `${id} to level ${lv + 1}`);
+      assert.strictEqual(s.coin, 0, 'takes exactly the price');
+    }
+  }));
+  assert.strictEqual(s.stardust, 12345, 'Stardust is never touched');
+});
+
+test('a level cannot be bought without the coins, before the skill is known, or before the hero has grown', () => {
+  const s = skillSave(10);
+  assert.strictEqual(Skills.upgrade(s, 'cen', 'cut'), false, 'no coins');
+  s.coin = 1e9;
+  assert.strictEqual(Skills.upgrade(s, 'cen', 'blaze'), false, 'taught at level 26');
+  // Cut is taught at level 1, so a level 10 hero can take it as far as level 5 and no further.
+  for (let i = 0; i < 4; i++) assert.ok(Skills.upgrade(s, 'cen', 'cut'), `step ${i}`);
+  assert.strictEqual(Skills.levelOf(s, 'cen', 'cut'), 5);
+  const st = Skills.status(s, 'cen', 'cut');
+  assert.strictEqual(st.grown, false);
+  assert.strictEqual(st.need, G.skillNeed(1, 5));
+  const before = s.coin;
+  assert.strictEqual(Skills.upgrade(s, 'cen', 'cut'), false, 'needs a stronger hero');
+  assert.strictEqual(s.coin, before, 'and a refused level costs nothing');
+});
+
+test('a skill stops at the level cap', () => {
+  const s = skillSave(60);
+  s.coin = 1e9;
+  for (let i = 0; i < 30; i++) Skills.upgrade(s, 'cen', 'cut');
+  assert.strictEqual(Skills.levelOf(s, 'cen', 'cut'), G.SKILL_MAX);
+  const st = Skills.status(s, 'cen', 'cut');
+  assert.ok(st.max && !st.ok);
+  assert.strictEqual(st.tier, 3);
+});
+
+test('a higher level hits harder in real combat, by exactly what the screen says', () => {
+  const damage = (lv) => {
+    const s = skillSave(40);
+    s.heroes.cen.skillLv.cut = lv;
+    const b = fixedFight(s);
+    return hitOf(b.perform(b.heroes[0], { kind: 'skill', id: 'cut', target: b.enemies[0] }));
+  };
+  const one = damage(1), ten = damage(10);
+  assert.ok(Math.abs(ten / one - (1 + G.SKILL_STEP * 9)) < 0.01, `${one} to ${ten}`);
+  assert.ok(damage(5) > one && damage(5) < ten);
+  assert.strictEqual(Skills.effect('cut', 1), '威力 +0%');
+  assert.strictEqual(Skills.effect('cut', 10), `威力 +${Math.round(G.SKILL_STEP * 900)}%`);
+});
+
+test('a higher level heals more, revives further and lands its side effects more often', () => {
+  const healed = (lv) => {
+    const s = skillSave(40);
+    s.heroes.ruo.skillLv.mend = lv;
+    const b = fixedFight(s);
+    const ruo = b.heroes.find((h) => h.id === 'ruo');
+    ruo.hp = 1;
+    return b.perform(ruo, { kind: 'skill', id: 'mend', target: ruo }).find((e) => e.type === 'heal').amount;
+  };
+  assert.ok(healed(10) > healed(1) * 1.4, `${healed(1)} to ${healed(10)}`);
+  assert.ok(Skills.at('revive', 10).revive > Skills.at('revive', 1).revive);
+  assert.strictEqual(Skills.at('flame', 1).chance, G.SKILLS.flame.chance);
+  assert.ok(Skills.at('flame', 10).chance > G.SKILLS.flame.chance);
+  Object.keys(G.SKILLS).forEach((id) => {
+    if (G.SKILLS[id].chance !== undefined) assert.ok(Skills.at(id, 10).chance <= 1, id);
+    if (G.SKILLS[id].revive) assert.ok(Skills.at(id, 10).revive <= 1, id);
+  });
+});
+
+test('skills that only protect last longer with each tier, and the one-turn guard stays one turn', () => {
+  assert.strictEqual(Skills.at('bronze', 1).turns, G.SKILLS.bronze.turns);
+  assert.strictEqual(Skills.at('bronze', 4).turns, G.SKILLS.bronze.turns + 1);
+  assert.strictEqual(Skills.at('bronze', 10).turns, G.SKILLS.bronze.turns + 3);
+  const wall = Skills.at('wall', 10).statuses;
+  assert.deepStrictEqual(wall.find((x) => x[0] === 'guard'), ['guard', 1]);
+  assert.strictEqual(wall.find((x) => x[0] === 'taunt')[1], 5);
+  assert.deepStrictEqual(G.SKILLS.wall.statuses.find((x) => x[0] === 'taunt'), ['taunt', 2], 'the base table is left alone');
+  assert.strictEqual(Skills.effect('bronze', 4), `持续 ${G.SKILLS.bronze.turns + 1} 回合`);
+});
+
+test('every skill states what each level does, and no level ever reads worse than the one before', () => {
+  const amount = (text) => Number(text.match(/\d+/)[0]);
+  G.HERO_ORDER.forEach((hero) => G.HEROES[hero].skills.forEach(([id]) => {
+    for (let lv = 1; lv <= G.SKILL_MAX; lv++) {
+      assert.ok(!/NaN|undefined/.test(Skills.effect(id, lv)), `${id} ${lv}: ${Skills.effect(id, lv)}`);
+      assert.ok(Skills.effectValue(id, lv).length > 0, id);
+      if (lv > 1) assert.ok(amount(Skills.effect(id, lv)) >= amount(Skills.effect(id, lv - 1)), `${id} at ${lv}`);
+    }
+    assert.ok(amount(Skills.effect(id, G.SKILL_MAX)) > amount(Skills.effect(id, 1)), `${id} must gain something in all`);
+  }));
+});
+
+test('level bonuses reach the march: road fights and the party rating both use them', () => {
+  const s = skillSave(40);
+  const low = P.power(s);
+  s.heroes.cen.skillLv.cut = 8;
+  assert.ok(P.power(s) > low, 'the rating moves, which refreshes the road forecast');
+  const u = P.heroUnit(s, 'cen', 0);
+  assert.strictEqual(u.sk.cut.lv, 8);
+  assert.strictEqual(u.sk.cut.tier, 2);
+  assert.strictEqual(u.sk.flame.lv, 1);
+  const b = fixedFight(s);
+  const ev = b.perform(b.heroes[0], { kind: 'skill', id: 'cut', target: b.enemies[0] });
+  const use = ev.find((e) => e.type === 'use');
+  assert.strictEqual(use.tier, 2, 'the battle screen is told which tier to play');
+  assert.strictEqual(use.lv, 8);
+});
+
+test('enemies keep the base skills, and the shared table never changes', () => {
+  const before = JSON.stringify(G.SKILLS);
+  const s = skillSave(40);
+  s.heroes.cen.skillLv.cut = 10;
+  const b = fixedFight(s, ['bifang']);
+  assert.strictEqual(b.skillOf(b.enemies[0], 'ember'), G.SKILLS.ember);
+  b.perform(b.heroes[0], { kind: 'skill', id: 'cut', target: b.enemies[0] });
+  assert.strictEqual(JSON.stringify(G.SKILLS), before);
+});
+
+test('one tap levels the cheapest skills first, within the budget, and only for heroes who have joined', () => {
+  const s = skillSave(40);
+  s.heroes.zhuo.joined = false;
+  s.coin = 1e9;
+  const budget = G.skillCost(1, 1) * 2 + G.skillCost(1, 2);
+  const r = Skills.autoUpgrade(s, budget);
+  assert.ok(r.n >= 2);
+  assert.ok(1e9 - s.coin <= budget, 'stays inside what it was given');
+  assert.deepStrictEqual(s.heroes.zhuo.skillLv, {}, 'nothing for someone not in the party');
+  // With no budget given it spends down until nothing more can be bought.
+  s.coin = 1e9;
+  Skills.autoUpgrade(s);
+  G.HEROES.cen.skills.forEach(([id]) => assert.strictEqual(Skills.status(s, 'cen', id).grown && !Skills.status(s, 'cen', id).max, false, id));
+  assert.strictEqual(Skills.readyCount(s, 'cen'), 0);
+});
+
+test('the auto logic in fights picks by trained strength, not by the base table', () => {
+  // Against this target, Cut and Flame are equally strong at base, and a tie goes to the first in the list.
+  const pick = (flameLv) => {
+    const s = skillSave(5);
+    s.heroes.cen.skillLv.flame = flameLv;
+    const b = fixedFight(s);
+    return b.autoAction(b.heroes[0]).id;
+  };
+  assert.strictEqual(G.SKILLS.cut.power, G.SKILLS.flame.power);
+  assert.strictEqual(pick(1), 'cut');
+  assert.strictEqual(pick(3), 'flame', 'a trained skill now does more, so it gets used');
+});
+
+test('every skill in the game has an animation signature', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'js/core/skillfx.js'), 'utf8');
+  Object.keys(G.SKILLS).forEach((id) => {
+    const fx = G.SKILLS[id].fx;
+    assert.ok(new RegExp(`\\b${fx}Hit\\(`).test(src), `${id} uses "${fx}", which has no signature`);
+  });
+  assert.ok(/\bshieldHit\(/.test(src), 'protective skills have their own');
+});
+
 // ---- Runner ----
 (async () => {
   let failed = 0;
