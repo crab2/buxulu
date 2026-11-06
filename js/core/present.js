@@ -9,6 +9,10 @@
 // WeChat's off-screen canvases is reported to be next to useless, so it could turn this off on a phone where
 // it would have worked. The cost is that a canvas keeps the first kind of context it is given, so there is
 // no 2D to go back to once WebGL is taken. A failed self-test tries a second way of uploading instead.
+//
+// The frame's pixels are copied into the texture every frame, and the frame's canvas is not handed to WebGL.
+// A build that preferred handing it over stayed on its first frame on a real phone, and a self-test that uploads
+// once can't see that kind of failure. Copying costs a little more, and it reads what the canvas holds right now.
 
 const OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: false, preserveDrawingBuffer: false };
 
@@ -18,14 +22,14 @@ const VERT = 'attribute vec2 p;attribute vec2 t;varying highp vec2 v;void main()
 const FRAG = '#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n'
   + 'uniform sampler2D s;varying vec2 v;void main(){gl_FragColor=texture2D(s,v);}';
 
-// Two ways to get a frame into the texture. Handing over the canvas is cheap, and is what WebGL engines do
-// for their text. Copying its pixels out is slower, but the rows are in a defined order, so it still works
-// where the direct route comes out blank or upside down.
-const fromCanvas = (gl, source) => gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+// Two ways to get a frame into the texture. Copying the pixels out reads the canvas as it is now, with rows in
+// a defined order, so nothing about the upload depends on the runtime's handling of canvases. Handing over the
+// canvas is the fallback for a phone where copying fails.
 const fromPixels = (gl, source) => {
   const { data } = source.getContext('2d').getImageData(0, 0, source.width, source.height);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, source.width, source.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
 };
+const fromCanvas = (gl, source) => gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
 
 // Sets up one textured quad and returns the function that shows a canvas on it. u1 and v1 say how much of
 // the frame is used: the buffer can be slightly wider than the screen, and cropping keeps each block whole.
@@ -75,7 +79,9 @@ const PROBE = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [32, 32, 
 const PROBE_W = 3, PROBE_H = 2, PROBE_K = 2;
 
 // Draws a small known pattern into a corner of the screen by the given route and reads it back, exact to the
-// pixel. It happens before anything is shown, and the corner is cleared afterwards.
+// pixel. It happens before anything is shown, and the corner is cleared afterwards. The pattern is drawn twice
+// on one canvas, in a different order, because the game re-uploads one canvas every frame and a first upload
+// proves nothing about the next.
 function drawsExactly(gl, make, upload) {
   let src = null;
   try {
@@ -84,21 +90,24 @@ function drawsExactly(gl, make, upload) {
     src.width = PROBE_W;
     src.height = PROBE_H;
     const c = src.getContext('2d');
-    PROBE.forEach((rgb, i) => {
-      c.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
-      c.fillRect(i % PROBE_W, Math.floor(i / PROBE_W), 1, 1);
-    });
     const w = PROBE_W * PROBE_K, h = PROBE_H * PROBE_K;
-    build(gl, w, h, 1, 1, upload)(src);
-    if (gl.getError() !== gl.NO_ERROR) return false;
+    const show = build(gl, w, h, 1, 1, upload);
     const px = new Uint8Array(w * h * 4);
-    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const row = h - 1 - y; // readPixels counts rows from the bottom.
-        const want = PROBE[Math.floor(row / PROBE_K) * PROBE_W + Math.floor(x / PROBE_K)];
-        const at = (y * w + x) * 4;
-        for (let k = 0; k < 3; k++) if (Math.abs(px[at + k] - want[k]) > 2) return false;
+    for (const pattern of [PROBE, PROBE.slice().reverse()]) {
+      pattern.forEach((rgb, i) => {
+        c.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
+        c.fillRect(i % PROBE_W, Math.floor(i / PROBE_W), 1, 1);
+      });
+      show(src);
+      if (gl.getError() !== gl.NO_ERROR) return false;
+      gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          const row = h - 1 - y; // readPixels counts rows from the bottom.
+          const want = pattern[Math.floor(row / PROBE_K) * PROBE_W + Math.floor(x / PROBE_K)];
+          const at = (y * w + x) * 4;
+          for (let k = 0; k < 3; k++) if (Math.abs(px[at + k] - want[k]) > 2) return false;
+        }
       }
     }
     return true;
@@ -181,13 +190,13 @@ function create(main, back, make, fit) {
     gl = null;
   }
   if (!gl) return plain('no-webgl');
-  // If neither route passes, the read-back may be what is failing, so the cheap route stays and the settings
-  // screen says it could not be verified.
-  let upload = fromCanvas, why = '';
-  if (!drawsExactly(gl, make, fromCanvas)) {
-    if (drawsExactly(gl, make, fromPixels)) {
-      upload = fromPixels;
-      why = 'pixels';
+  // If neither route passes, the read-back may be what is failing, so copying stays and the settings screen
+  // says it could not be verified.
+  let upload = fromPixels, why = '';
+  if (!drawsExactly(gl, make, fromPixels)) {
+    if (drawsExactly(gl, make, fromCanvas)) {
+      upload = fromCanvas;
+      why = 'canvas';
     } else why = 'unverified';
   }
   try {

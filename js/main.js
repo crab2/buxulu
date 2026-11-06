@@ -123,6 +123,16 @@ if (wx.getUpdateManager) {
 
 game.go('title', null, true);
 game.start();
+
+// A frozen picture looks the same whatever froze it, and a phone has neither a console nor a way to reach the
+// settings screen behind it. So a build that isn't released says once, in a native message that doesn't depend
+// on the canvas, how the frame is shown, how many frames have run and how many different errors they hit.
+if (wx.showToast && !steps.isRelease()) {
+  setTimeout(() => {
+    const how = D.info.mode + (D.info.why ? ':' + D.info.why : '');
+    wx.showToast({ title: `${how} f${game.frames} e${game.errors.length}`, icon: 'none', duration: 4000 });
+  }, 4000);
+}
 store.pull().then((replaced) => {
   if (replaced) audio.configure(store.get().settings);
 });

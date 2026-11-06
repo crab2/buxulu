@@ -48,6 +48,7 @@ const game = {
   timeScale: 1, // Automated tests raise this to fast-forward animations.
   transition: null,
   errors: [],
+  frames: 0,
   onTick: null, // Runs every frame whatever is on screen. The idle march hangs off this.
   lastTouch: 0,
 
@@ -184,6 +185,7 @@ function frame() {
   const dt = Math.min(0.1, (now - last) / 1000) * game.timeScale;
   last = now;
   game.t += dt;
+  game.frames++;
   ui.state.t = game.t;
   try {
     const tr = game.transition;
