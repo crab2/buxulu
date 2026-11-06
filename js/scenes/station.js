@@ -175,7 +175,7 @@ class Settings {
     ui.alpha(0.6);
     ui.rect(0, 0, W, H, '#000000');
     ui.alpha(1);
-    const w = W - 32, x = 16, rowsH = 28 * 8 + 72;
+    const w = W - 32, x = 16, rowsH = 28 * 8 + 98;
     const y = Math.round((H - rowsH) / 2);
     ui.panel(x, y, w, rowsH);
     ui.text('设置', W / 2, y + 10, UI.gold, { align: 'c' });
@@ -210,6 +210,11 @@ class Settings {
     });
     cy += 30;
     ui.text('字体:Fusion Pixel Font (OFL 1.1)', W / 2, cy, UI.faint, { align: 'c' });
+    // What this phone ended up with, for working out why a screen looks wrong.
+    const di = D.info;
+    const filter = di.smoothing === null ? '?' : di.smoothing ? 'smooth' : 'nearest';
+    ui.text(`${di.mode}${di.why ? ':' + di.why : ''} x${D.scale} ${W}x${H}`, W / 2, cy + 13, UI.faint, { align: 'c' });
+    ui.text(`${di.physW}x${di.physH} pr${di.pr} ${filter}`, W / 2, cy + 26, UI.faint, { align: 'c' });
     ui.button('set-close', x + 12, y + rowsH - 26, w - 24, 22, { label: '关闭', kind: 'ghost', sound: 'back', onTap: () => game.pop(this) });
   }
 }

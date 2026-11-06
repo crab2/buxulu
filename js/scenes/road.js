@@ -21,6 +21,8 @@ const O = require('./overlays.js');
 const nav = require('./nav.js');
 const Campaign = require('./campaign.js');
 const { Weather, Particles } = require('../core/fx.js');
+const { SkillFx } = require('../core/skillfx.js');
+const Skills = require('../systems/skills.js');
 const { UI } = require('../core/palette.js');
 const { TIPS } = require('../data/story.js');
 
@@ -51,6 +53,7 @@ class RoadView {
     this.x = 0;
     // This scene runs for hours at a time, so it keeps its particle count modest.
     this.fx = new Particles(110);
+    this.sk = new SkillFx(this.fx, { x: 0, y: 0, w: W, h: sceneH });
     this.weather = new Weather(theme);
     this.foes = [];
     this.pops = [];
@@ -73,7 +76,7 @@ class RoadView {
     this.heroes = ids.map((id, i) => {
       const st = P.heroStats(s, id);
       const old = this.heroes.find((h) => h.id === id);
-      return { id, x: W * slots[i][0], dy: slots[i][1], ox: old ? old.ox : 0, pose: old ? old.pose : null, poseT: 0, flash: 0, atk: st.atk, outfit: s.heroes[id].outfit, phase: i * 1.7 };
+      return { id, x: W * slots[i][0], dy: slots[i][1], ox: old ? old.ox : 0, pose: old ? old.pose : null, poseT: 0, flash: 0, atk: st.atk, tier: Skills.bestTier(s, id), outfit: s.heroes[id].outfit, phase: i * 1.7 };
     });
     this.pet = s.wardrobe.pet ? W_.COSMETICS[s.wardrobe.pet].pet : null;
   }
@@ -91,6 +94,7 @@ class RoadView {
   update(dt, lv) {
     const speed = WALK_SPEED * this.pace;
     this.fx.update(dt);
+    this.sk.update(dt);
     this.weather.update(dt);
     this.shake = Math.max(0, this.shake - dt * 22);
     this.pulse = Math.max(0, this.pulse - dt * 2.4);
@@ -180,19 +184,23 @@ class RoadView {
     t.flash = 1;
     t.ox = -5;
     t.hits -= crit ? 2 : 1;
+    // Blows on the road show how far each hero has come. They stop short of the top tier's full display,
+    // because this scene plays for hours, usually with nobody watching.
+    const from = { x: h.x - 6, y: this.fy + h.dy - 26 };
+    const ground = this.fy + t.dy;
+    const tier = Math.min(2, h.tier || 0);
     if (h.id === 'ruo') {
       h.pose = 'cast';
-      this.fx.beam(h.x - 6, this.fy + h.dy - 26, center.x, center.y, 'wood', 12);
-      this.fx.burst(center.x, center.y, 'wood', 12, 60);
+      this.sk.impact('wood', tier, from, center, ground);
     } else if (h.id === 'zhuo') {
       h.pose = 'atk';
       h.ox = -12;
-      this.fx.burst(center.x, this.fy + t.dy - 4, 'earth', 14, 70);
+      this.sk.impact('earth', tier, from, center, ground);
       this.shake = crit ? 5 : 3;
     } else {
       h.pose = crit ? 'thrust' : 'atk';
       h.ox = -18;
-      this.fx.slash(center.x, center.y, 'metal');
+      this.sk.impact('slash', tier, from, center, ground, 'metal');
     }
     h.poseT = 0.26;
     this.sound(crit ? 'crit' : 'hit');
@@ -257,6 +265,7 @@ class RoadView {
       ui.img(a, Math.round(this.heroes[0].x - 28 + sx), this.fy + 6 - a.h);
     }
     this.fx.draw(sx, 0);
+    this.sk.draw(false);
     ui.tileX(r.fore.cv, -this.x * r.fore.speed, r.fore.y);
     this.weather.draw(this.sceneH);
     this.pops.forEach((p) => {

@@ -13,6 +13,32 @@
   const measured = rectOf();
   const base = measured.width > 50 && measured.height > 50 ? { width: measured.width, height: measured.height } : { width: 390, height: 844 };
   const params = new URLSearchParams(location.search);
+  // Behaviour a real phone may have and desktop Chromium does not, so tests can see what the game does there.
+  // smoothing=ignored: the 2D canvas filters however it is asked. webgl=none: no WebGL at all.
+  // webgl=onscreen: WebGL exists only on the on-screen canvas, as has been reported of WeChat.
+  // webgl=blank, webgl=flipped: uploading a canvas does nothing, or comes out upside down. Raw pixels still work.
+  const webglFlag = params.get('webgl');
+  if (params.get('smoothing') === 'ignored') {
+    Object.defineProperty(CanvasRenderingContext2D.prototype, 'imageSmoothingEnabled', { get: () => true, set() {} });
+  }
+  if (webglFlag === 'none' || webglFlag === 'onscreen') {
+    const realContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function (type, o) {
+      const refused = type === 'webgl' && (webglFlag === 'none' || this.id !== 'game');
+      return refused ? null : realContext.call(this, type, o);
+    };
+  }
+  if (webglFlag === 'blank' || webglFlag === 'flipped') {
+    const realUpload = WebGLRenderingContext.prototype.texImage2D;
+    WebGLRenderingContext.prototype.texImage2D = function (...args) {
+      if (args.length === 9) return realUpload.apply(this, args); // Raw pixels carry their size; a canvas does not.
+      if (webglFlag === 'blank') return undefined;
+      this.pixelStorei(this.UNPACK_FLIP_Y_WEBGL, true);
+      realUpload.apply(this, args);
+      this.pixelStorei(this.UNPACK_FLIP_Y_WEBGL, false);
+      return undefined;
+    };
+  }
   const handlers = { start: [], move: [], end: [], cancel: [], show: [], hide: [] };
   let first = true;
   let privacyHandler = null;

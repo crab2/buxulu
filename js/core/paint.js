@@ -267,6 +267,15 @@ class Grid {
     }
     return g;
   }
+  // A copy at another size, taking the nearest source pixel, so no new colours can appear.
+  resized(w, h) {
+    const g = new Grid(w, h);
+    for (let y = 0; y < h; y++) {
+      const sy = Math.floor(((y + 0.5) * this.h) / h);
+      for (let x = 0; x < w; x++) g.d[y * w + x] = this.d[sy * this.w + Math.floor(((x + 0.5) * this.w) / w)];
+    }
+    return g;
+  }
   opaque() {
     for (let i = 0; i < this.d.length; i++) if (this.d[i] === -1) return false;
     return true;

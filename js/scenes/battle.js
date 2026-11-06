@@ -12,6 +12,8 @@ const { Battle, ULT_FULL } = require('../systems/battle.js');
 const { CHAPTERS } = require('../data/chapters.js');
 const O = require('./overlays.js');
 const { Particles, Weather } = require('../core/fx.js');
+const { SkillFx } = require('../core/skillfx.js');
+const Cast = require('./cast.js');
 const { TIPS } = require('../data/story.js');
 const { UI } = require('../core/palette.js');
 const { dipperPoints } = require('../art/scenery.js');
@@ -43,6 +45,7 @@ class BattleScene {
     this.vis = {};
     this.layout(heroes, enemies);
     this.fx = new Particles();
+    this.sk = new SkillFx(this.fx, { x: 0, y: 0, w: W, h: this.fieldH });
     this.weather = new Weather(this.chapter.theme);
     this.runner = new game.Runner();
     this.pops = [];
@@ -50,7 +53,10 @@ class BattleScene {
     this.mode = 'wait'; // wait | menu | skills | items | target | result
     this.log = '';
     this.shake = 0;
+    this.stop = 0;
     this.dim = 0;
+    this.dimTo = 0;
+    this.cast = null;
     this.ultVis = null;
     this.actor = null;
     this.pending = null;
@@ -76,10 +82,16 @@ class BattleScene {
   }
   update(dt) {
     const speed = store.get().settings.speed;
-    const sdt = dt * (this.mode === 'menu' || this.mode === 'skills' || this.mode === 'items' || this.mode === 'target' ? 1 : speed);
-    this.runner.update(sdt);
+    const real = dt * (this.mode === 'menu' || this.mode === 'skills' || this.mode === 'items' || this.mode === 'target' ? 1 : speed);
+    this.runner.update(real);
+    // A heavy blow holds everything still for a moment, which is most of what makes it feel heavy.
+    this.stop = Math.max(0, this.stop - real);
+    const sdt = this.stop > 0 ? real * 0.12 : real;
     this.fx.update(sdt);
+    this.sk.update(sdt);
     this.weather.update(dt);
+    this.dim += (this.dimTo - this.dim) * Math.min(1, real * 12);
+    if (this.dim < 0.01) this.dim = 0;
     this.shake = Math.max(0, this.shake - sdt * 26);
     this.pops.forEach((p) => {
       p.t += sdt;
@@ -142,55 +154,39 @@ class BattleScene {
   }
   *play(events) {
     for (const e of events) yield* this.playOne(e);
+    // Whatever darkened the field for a skill lifts when that skill is over.
+    this.cast = null;
+    if (!this.ultVis) this.dimTo = 0;
+  }
+  // ---- What core/skillfx.js and scenes/cast.js need from a stage ----
+  feet(u) {
+    const v = this.vis[u.key];
+    return { x: v.x, y: v.y };
+  }
+  foesOf(u) {
+    return this.b.live(u.side === 'hero' ? 'enemy' : 'hero');
+  }
+  alliesOf(u) {
+    return this.b.live(u.side);
+  }
+  alpha(a) {
+    ui.alpha(a);
+  }
+  image(s, x, y) {
+    ui.img(s, x, y);
   }
   *playOne(e) {
     switch (e.type) {
       case 'turn':
         this.log = '';
         break;
-      case 'use': {
-        const v = this.vis[e.actor.key];
+      case 'use':
         this.log = `${e.actor.name} · ${e.name}`;
-        if (e.pose === 'atk' && e.actor.side === 'hero') {
-          this.setPose(e.actor, 'windup', 0.14);
-          yield 0.11;
-        }
-        if (e.pose) this.setPose(e.actor, e.pose, 0.5);
-        const dir = e.actor.side === 'hero' ? -1 : 1;
-        v.ox = dir * (e.pose === 'atk' || e.pose === 'thrust' ? 16 : 6);
-        if (e.fx === 'heal' || e.pose === 'cast') audio.sfx('magic');
-        if (!e.basic) this.say(e.name, 0.7);
-        if (e.actor.side === 'enemy') {
-          v.ox = dir * 14;
-          this.setPose(e.actor, 'atk', 0.3);
-        }
-        yield 0.2;
+        yield* Cast.use(this, e);
         break;
-      }
-      case 'hit': {
-        const v = this.vis[e.target.key];
-        const p = this.center(e.target);
-        const fx = e.fx || 'slash';
-        if (fx === 'slash') this.fx.slash(p.x, p.y, e.el || 'metal');
-        else if (fx === 'star') this.fx.burst(p.x, p.y, 'star', 26, 100);
-        else {
-          const from = this.center(e.actor);
-          this.fx.beam(from.x, from.y, p.x, p.y, fx, 20);
-          this.fx.burst(p.x, p.y, fx, 22, 80);
-        }
-        v.flash = 1;
-        v.ox = e.target.side === 'hero' ? 7 : -7;
-        this.setPose(e.target, 'hurt', 0.3);
-        this.shake = e.crit ? 9 : 4;
-        audio.sfx(e.crit ? 'crit' : 'hit');
-        audio.buzz(e.crit ? 'medium' : 'light');
-        this.pop(p.x, p.y - 16, e.amount, e.crit ? '#f7dd7a' : '#ffffff', e.crit ? 3 : 2);
-        if (e.eff === 'weak') this.popText(p.x, p.y - 34, '克制', '#ec7a4e');
-        if (e.eff === 'resist') this.popText(p.x, p.y - 34, '抵抗', '#a79fb8');
-        if (e.crit) this.popText(p.x, p.y - 46, '暴击', '#f7dd7a');
-        yield 0.2;
+      case 'hit':
+        yield* Cast.hit(this, e);
         break;
-      }
       case 'dot': {
         const p = this.center(e.target);
         this.pop(p.x, p.y - 12, e.amount, e.status === 'burn' ? '#ec7a4e' : '#7fd1a4', 2);
@@ -198,14 +194,9 @@ class BattleScene {
         yield 0.2;
         break;
       }
-      case 'heal': {
-        const p = this.center(e.target);
-        if (e.amount > 0) this.pop(p.x, p.y - 12, '+' + e.amount, '#7fd1a4', 2);
-        this.fx.rise(p.x, p.y, 'heal', 12);
-        audio.sfx('heal');
-        yield 0.14;
+      case 'heal':
+        yield* Cast.heal(this, e);
         break;
-      }
       case 'mp': {
         const p = this.center(e.target);
         this.pop(p.x, p.y - 12, '+' + e.amount, '#6fb0e0', 2);
@@ -282,6 +273,7 @@ class BattleScene {
         v.a = 1;
         const p = this.center(e.target);
         this.fx.rise(p.x, p.y, 'heal', 30);
+        if (this.cast) this.sk.impact('heal', this.cast.hitTier, p, p, this.feet(e.target).y);
         this.pop(p.x, p.y - 12, '+' + e.amount, '#7fd1a4', 2);
         audio.sfx('level');
         yield 0.3;
@@ -323,7 +315,7 @@ class BattleScene {
       }
       case 'ultStart':
         this.ultVis = { stars: e.stars, lit: 0, t: 0 };
-        this.dim = 0.65;
+        this.dimTo = 0.65;
         this.say('七 星 步', 1.1);
         audio.sfx('gate');
         yield 0.6;
@@ -336,7 +328,7 @@ class BattleScene {
       case 'ultEnd':
         yield 0.25;
         this.ultVis = null;
-        this.dim = 0;
+        this.dimTo = 0;
         break;
       default:
     }
@@ -447,8 +439,8 @@ class BattleScene {
     this.mode = 'target';
   }
   pickSkill(id) {
-    const sk = G.SKILLS[id];
     const a = this.actor;
+    const sk = this.b.skillOf(a, id);
     const data = { kind: 'skill', id };
     if (sk.target === 'enemy') return this.needTarget(sk, data, this.b.enemies);
     if (sk.target === 'ally') return this.needTarget(sk, data, this.b.heroes);
@@ -625,13 +617,14 @@ class BattleScene {
       const skills = a.skills;
       const sw = Math.floor((w - gap) / 2);
       skills.forEach((id, i) => {
-        const sk = G.SKILLS[id];
+        const sk = this.b.skillOf(a, id);
         const cost = this.b.mpCost(a, sk);
         const ok = this.b.canUse(a, id);
         const x = m + (i % 2) * (sw + gap);
         const y = y0 + Math.floor(i / 2) * 26;
         ui.button('skill-' + id, x, y, sw, 24, { kind: ok ? 'normal' : 'off', disabled: !ok, onTap: () => this.pickSkill(id), label: '' });
         ui.text(sk.name, x + 6, y + 6, ok ? (sk.el ? G.ELEMENTS[sk.el].css : UI.jade) : UI.faint);
+        if (sk.lv > 1) ui.text(`Lv${sk.lv}`, x + 8 + ui.font.width(sk.name), y + 6, ok ? G.SKILL_TIERS[sk.tier].css : UI.faint);
         ui.text(String(cost), x + sw - 6, y + 6, ok ? UI.blue : UI.faint, { align: 'r' });
       });
       ui.button('cmd-back', m + w - 62, bottom - 24, 62, 24, { label: '返回', kind: 'ghost', sound: 'back', onTap: () => { this.mode = 'menu'; } });
@@ -734,8 +727,10 @@ class BattleScene {
     const units = this.b.units.slice().sort((a, b) => this.vis[a.key].y - this.vis[b.key].y);
     ui.ctx.save();
     ui.ctx.translate(shakeX, shakeY);
+    this.sk.draw(true);
     units.forEach((u) => this.drawUnit(u));
     this.fx.draw();
+    this.sk.draw(false);
     ui.ctx.restore();
     if (this.ultVis) {
       const pts = dipperPoints(W * 0.62, this.fieldH * 0.18, W * 0.5);

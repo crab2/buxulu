@@ -314,7 +314,10 @@ async function assertOnScreen(d, where) {
     await assertTidy(d, 'boost sheet');
     await d.tap('modal-0');
     await d.waitScene('Modal');
-    assert.ok((await d.state()).idle.hasteSecs >= 1800, 'buying from the road works too, and the sheet stays open');
+    // Haste counts down from the moment it is bought, so a read just after the once-a-second tick is a little under 1800.
+    const bought = await d.state();
+    assert.ok(bought.stardust < 2000, 'buying from the road works too, and the sheet stays open');
+    assert.ok(bought.idle.hasteSecs > 1790 && bought.idle.hasteSecs <= 1800, `haste after buying: ${bought.idle.hasteSecs}`);
     await d.tap('modal-3');
     await go(d, 'station');
     await d.waitScene('Station');
@@ -1253,6 +1256,7 @@ async function assertOnScreen(d, where) {
 
   const SIZES = [
     ['small-16x9', { width: 360, height: 640 }, 3],
+    ['budget-720', { width: 360, height: 800 }, 2],
     ['iphone-se', { width: 320, height: 568 }, 2],
     ['tall-20x9', { width: 412, height: 915 }, 2.625],
     ['ipad', { width: 768, height: 1024 }, 2],
@@ -1277,6 +1281,9 @@ async function assertOnScreen(d, where) {
         s.gear.starter = true; s.gacha.giftStars = 1;
         s.gacha.tickets = 25; s.gear.iron = 1234;
         s.progress.stars = 6;
+        s.heroes.cen.lv = 30; s.heroes.ruo.lv = 24;
+        s.heroes.cen.skillLv = { cut: 10, flame: 7, meteor: 4 };
+        s.heroes.ruo.skillLv = { mend: 10, thorn: 3 };
         const all = [];
         ['wolf', 'gate', 'lian', 'po'].forEach((set, i) => ['blade', 'coat', 'boots', 'charm'].forEach((slot, k) => {
           all.push({ uid: 'g' + i + k, set, slot, rar: (i + k) % 4, lv: (i + 1) * 3 + k });
@@ -1297,6 +1304,19 @@ async function assertOnScreen(d, where) {
       await visit('road', 'road');
       await visit('station', 'station');
       await visit('party', 'party');
+      await visit('skills', 'skills', { hero: 'cen' });
+      await visit('skills-healer', 'skills', { hero: 'ruo' });
+      await d.tap('skill-tier-3');
+      await d.page.waitForTimeout(150);
+      await assertOnScreen(d, 'skills preview');
+      await assertTidy(d, 'skills preview');
+      await visit('station-for-settings', 'station');
+      await d.page.evaluate(() => window.__BUXU__.game.push('settings'));
+      await d.page.waitForTimeout(120);
+      await assertOnScreen(d, 'settings');
+      await assertTidy(d, 'settings');
+      await shot(d, `${name}-settings`);
+      await d.tap('set-close');
       await visit('trials', 'trials');
       await visit('altar', 'altar');
       await visit('dispatch', 'dispatch');
@@ -1378,8 +1398,11 @@ async function assertOnScreen(d, where) {
         const P = CanvasRenderingContext2D.prototype;
         const of = P.fillRect, od = P.drawImage;
         let f = 0, g = 0, n = 0;
-        P.fillRect = function (...a) { f++; return of.apply(this, a); };
-        P.drawImage = function (...a) { g++; return od.apply(this, a); };
+        // What a frame costs, every frame. Baking a sprite the first time it appears is a one-off on another
+        // canvas, and catching one in the window said more about when a monster spawned than about the screen.
+        const screen = window.__BUXU__.display.ctx;
+        P.fillRect = function (...a) { if (this === screen) f++; return of.apply(this, a); };
+        P.drawImage = function (...a) { if (this === screen) g++; return od.apply(this, a); };
         const tick = () => {
           if (++n >= 12) {
             P.fillRect = of;
@@ -1392,7 +1415,19 @@ async function assertOnScreen(d, where) {
       const st = await d.page.evaluate(() => window.__BUXU__.art.stats());
       report.push({ label, ...dc, ...st });
     };
-    for (const sc of ['road', 'station', 'party', 'trials', 'altar', 'dispatch', 'garden', 'wardrobe', 'furnace', 'shop', 'tower', 'wander', 'letters', 'gearbag', 'gacha']) {
+    // The road plays for hours, so it has to stay inside the budget with every hero's blows at their grandest.
+    await d.page.evaluate(() => {
+      const B = window.__BUXU__, s = B.store.get();
+      ['cen', 'ruo', 'zhuo'].forEach((id) => { s.heroes[id].skillLv = { cut: 7, mend: 7, wall: 7 }; });
+      B.game.go('road', null, true);
+    });
+    await d.page.waitForTimeout(4000);
+    await measure('road, top tier');
+    await d.page.evaluate(() => {
+      const s = window.__BUXU__.store.get();
+      ['cen', 'ruo', 'zhuo'].forEach((id) => { s.heroes[id].skillLv = {}; });
+    });
+    for (const sc of ['road', 'station', 'party', 'skills', 'trials', 'altar', 'dispatch', 'garden', 'wardrobe', 'furnace', 'shop', 'tower', 'wander', 'letters', 'gearbag', 'gacha']) {
       await go(d, sc);
       await measure(sc);
     }
@@ -1483,6 +1518,346 @@ async function assertOnScreen(d, where) {
     await d.page.evaluate(() => { window.__BUXU__.game.lastTouch = Date.now(); });
     await d.page.waitForTimeout(1300);
     assert.strictEqual(await d.page.evaluate(() => window.__wxMock.fps), 30);
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  // ---- The picture reaching the screen ----
+  // Compares a whole frame on the visible canvas with a perfect block upscale of the buffer it came from.
+  // Reading inside the frame is what makes this reliable: a WebGL canvas may be cleared once it is composited.
+  const readScreen = (d) => d.page.evaluate(() => new Promise((ok) => {
+    const D = window.__BUXU__.display, real = D.present;
+    D.present = function () {
+      real();
+      D.present = real;
+      const cv = document.getElementById('game');
+      const pw = cv.width, ph = cv.height;
+      let px, bottomUp = false;
+      if (D.info.mode === 'webgl') {
+        const gl = cv.getContext('webgl');
+        px = new Uint8Array(pw * ph * 4);
+        gl.readPixels(0, 0, pw, ph, gl.RGBA, gl.UNSIGNED_BYTE, px);
+        bottomUp = true;
+      } else px = cv.getContext('2d').getImageData(0, 0, pw, ph).data;
+      const back = D.ctx.getImageData(0, 0, D.W, D.H).data;
+      let wrong = 0, lit = 0;
+      for (let y = 0; y < ph; y++) {
+        const row = bottomUp ? ph - 1 - y : y;
+        for (let x = 0; x < pw; x++) {
+          const a = (row * pw + x) * 4;
+          const b = (Math.floor(y / D.scale) * D.W + Math.floor(x / D.scale)) * 4;
+          if (Math.abs(px[a] - back[b]) > 2 || Math.abs(px[a + 1] - back[b + 1]) > 2 || Math.abs(px[a + 2] - back[b + 2]) > 2) wrong++;
+          if (px[a] + px[a + 1] + px[a + 2] > 30) lit++;
+        }
+      }
+      ok({ mode: D.info.mode, why: D.info.why, smoothing: D.info.smoothing, wrong: wrong / (pw * ph), lit: lit / (pw * ph), pw, ph, scale: D.scale });
+    };
+  }));
+
+  await check('sharp picture: every screen pixel comes from exactly one pixel of the buffer', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, OPEN_ALL);
+    for (const scene of ['road', 'party', 'station']) {
+      await go(d, scene);
+      await d.page.waitForTimeout(300);
+      const r = await readScreen(d);
+      assert.strictEqual(r.mode, 'webgl');
+      assert.strictEqual(r.wrong, 0, `${scene}: ${(r.wrong * 100).toFixed(2)}% of pixels differ`);
+      assert.ok(r.lit > 0.3, `${scene} should not be blank`);
+    }
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('sharp picture: a phone that ignores the smoothing flag still gets square pixels', async () => {
+    const d = await open(browser, { speed: 3, query: '?smoothing=ignored' });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'road');
+    await d.page.waitForTimeout(300);
+    const r = await readScreen(d);
+    assert.strictEqual(r.smoothing, true, 'the self-test notices this kind of phone');
+    assert.strictEqual(r.mode, 'webgl');
+    assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('sharp picture: this test really does catch blur, on the path the fix replaced', async () => {
+    const d = await open(browser, { speed: 3, query: '?smoothing=ignored&webgl=none' });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'road');
+    await d.page.waitForTimeout(300);
+    const r = await readScreen(d);
+    assert.strictEqual(r.mode, '2d');
+    assert.ok(r.wrong > 0.01, `expected visible blur here, found ${(r.wrong * 100).toFixed(2)}%`);
+    await d.ctx.close();
+  });
+
+  await check('sharp picture: a phone with WebGL only on the on-screen canvas still gets square pixels', async () => {
+    const d = await open(browser, { speed: 3, query: '?smoothing=ignored&webgl=onscreen' });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'road');
+    await d.page.waitForTimeout(300);
+    const r = await readScreen(d);
+    assert.strictEqual(r.mode, 'webgl', `fell back to 2D: ${r.why}`);
+    assert.strictEqual(r.why, '');
+    assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
+    assert.ok(r.lit > 0.3, 'something is on the screen');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  for (const [label, query] of [['does nothing', '?webgl=blank'], ['comes out upside down', '?webgl=flipped']]) {
+    await check(`sharp picture: a canvas upload that ${label} switches to copying pixels`, async () => {
+      const d = await open(browser, { speed: 3, query });
+      await prepare(d, OPEN_ALL);
+      await go(d, 'party');
+      await d.waitScene('Party');
+      const r = await readScreen(d);
+      assert.strictEqual(r.mode, 'webgl');
+      assert.strictEqual(r.why, 'pixels');
+      assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
+      assert.ok(r.lit > 0.3, 'something is on the screen');
+      await d.tap('nav-road');
+      await d.waitScene('Road');
+      await d.assertClean();
+      await d.ctx.close();
+    });
+  }
+
+  await check('sharp picture: no WebGL at all falls back to 2D rather than a black screen', async () => {
+    const d = await open(browser, { speed: 3, query: '?webgl=none' });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'party');
+    await d.waitScene('Party');
+    const r = await readScreen(d);
+    assert.strictEqual(r.mode, '2d');
+    assert.strictEqual(r.why, 'no-webgl');
+    assert.strictEqual(r.wrong, 0, 'where the flag works, 2D is exact too');
+    assert.ok(r.lit > 0.3, 'something is on the screen');
+    await d.tap('nav-road');
+    await d.waitScene('Road');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('sharp picture: enlarged numbers, text and icons stay crisp whatever the runtime filters', async () => {
+    const d = await open(browser, { speed: 3, query: '?smoothing=ignored' });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'party');
+    await d.waitScene('Party');
+    const r = await d.page.evaluate(() => {
+      const B = window.__BUXU__, ctx = B.display.ctx, ui = B.ui;
+      const colours = (draw) => {
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, 200, 80);
+        draw();
+        const data = ctx.getImageData(0, 0, 200, 80).data, seen = new Set();
+        for (let i = 0; i < data.length; i += 4) seen.add((data[i] << 16) | (data[i + 1] << 8) | data[i + 2]);
+        return seen.size;
+      };
+      const piece = { slot: 'blade', set: 'wolf', rar: 2 };
+      return {
+        digits: [1, 2, 3, 4].map((k) => colours(() => ui.numberBig('1234', 80, 10, '#f7dd7a', k))),
+        text: colours(() => ui.font.drawBig(ctx, '步虚', 4, 4, '#f7dd7a', 3)),
+        label: colours(() => ui.img(B.art.bigLabel('断金', '#f7dd7a', 2), 4, 4)),
+        icon1: colours(() => ui.img(B.art.gear(piece), 4, 4)),
+        icon2: colours(() => ui.imgScaled(B.art.gear(piece), 4, 4, 32, 32)),
+      };
+    });
+    r.digits.forEach((n, i) => assert.ok(n <= 3, `digits at x${i + 1} show ${n} colours: filtering got in`));
+    assert.ok(r.text <= 2, `big text shows ${r.text} colours`);
+    assert.ok(r.label <= 3, `cut-in label shows ${r.label} colours`);
+    assert.ok(r.icon2 <= r.icon1, `an icon at x2 has ${r.icon2} colours against ${r.icon1} at x1`);
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('settings report what the phone ended up with', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'station');
+    await d.waitScene('Station');
+    await d.page.evaluate(() => window.__BUXU__.game.push('settings'));
+    await d.page.waitForTimeout(120);
+    const texts = await d.page.evaluate(() => new Promise((ok) => {
+      const B = window.__BUXU__;
+      B.ui.state.debug = true;
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        B.ui.state.debug = false;
+        ok(B.ui.state.texts.map((t) => t.str));
+      }));
+    }));
+    assert.ok(texts.some((t) => /^webgl x\d+ \d+x\d+$/.test(t)), texts.join(' | '));
+    assert.ok(texts.some((t) => /^\d+x\d+ pr[\d.]+ nearest$/.test(t)), texts.join(' | '));
+    await assertTidy(d, 'settings');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  // ---- Skill levels and how they look ----
+  await check('skills: level one by hand, reach a new tier, see it in a fight, and keep it after a reload', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, `${OPEN_ALL}; s.heroes.cen.lv = 20; s.coin = 500000; s.stardust = 77; s.heroes.cen.skillLv = { cut: 3 };`);
+    await go(d, 'party');
+    await d.waitScene('Party');
+    await d.tap('skills-open');
+    await d.waitScene('SkillsScene');
+    await assertTidy(d, 'skills');
+    const before = await d.state();
+    const price = await d.page.evaluate(() => window.__BUXU__.skills.status(window.__BUXU__.store.get(), 'cen', 'cut').cost);
+    await d.tap('skill-up-cut');
+    let s = await d.state();
+    assert.strictEqual(s.heroes.cen.skillLv.cut, 4, 'one tap, one level');
+    assert.strictEqual(s.coin, before.coin - price, 'paid in coins');
+    assert.strictEqual(s.stardust, 77, 'Stardust untouched');
+    // Level 4 begins a new tier, and the stage shows the new look straight away.
+    const stage = await d.page.evaluate(() => {
+      const sc = window.__BUXU__.game.top();
+      return { tier: sc.previewTier, toast: window.__BUXU__.ui.state.toast };
+    });
+    assert.strictEqual(stage.tier, 1);
+    assert.ok(stage.toast.includes('小成'), stage.toast);
+    // Any tier can be previewed without owning it, and doing so buys nothing.
+    await d.tap('skill-tier-3');
+    await d.page.waitForTimeout(500);
+    assert.strictEqual(await d.page.evaluate(() => window.__BUXU__.game.top().previewTier), 3);
+    assert.strictEqual((await d.state()).heroes.cen.skillLv.cut, 4);
+    await assertOnScreen(d, 'skills preview');
+    await d.tap('skill-row-flame');
+    assert.strictEqual(await d.page.evaluate(() => window.__BUXU__.game.top().selected), 'flame');
+    await d.tap('skill-auto');
+    s = await d.state();
+    assert.ok(s.heroes.cen.skillLv.flame > 1, 'one tap reaches the rest');
+    // The fight uses what was bought.
+    await d.page.evaluate(() => window.__BUXU__.store.persist());
+    await go(d, 'battle', { fight: { lv: 12, foes: ['bifang'] }, chapter: 1, from: 'road' });
+    await d.waitScene('BattleScene');
+    const inFight = await d.page.evaluate(() => {
+      const b = window.__BUXU__.game.top().b, cen = b.heroes.find((h) => h.id === 'cen');
+      return b.skillOf(cen, 'cut').lv;
+    });
+    assert.ok(inFight >= 4);
+    await d.page.reload();
+    await d.page.waitForFunction(() => window.__BUXU__ && window.__BUXU__.game.top());
+    const kept = await d.state();
+    assert.strictEqual(kept.heroes.cen.skillLv.cut, s.heroes.cen.skillLv.cut, 'saved');
+    await d.ctx.close();
+  });
+
+  await check('skills: the back button returns to the same hero, and locked skills say why', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, `${OPEN_ALL}; s.heroes.ruo.lv = 12; s.coin = 0;`);
+    await go(d, 'party', { hero: 'ruo' });
+    await d.waitScene('Party');
+    await d.tap('skills-open');
+    await d.waitScene('SkillsScene');
+    const hits = await d.ids();
+    assert.ok(hits.includes('skill-row-tide'), 'a skill not yet learned is still listed');
+    assert.ok(!hits.includes('skill-up-tide'), 'and it has nothing to buy');
+    assert.ok(!hits.includes('skill-up-mend'), 'with no coins, the button does nothing');
+    await d.tap('skills-tab-zhuo');
+    assert.strictEqual(await d.page.evaluate(() => window.__BUXU__.game.top().hero), 'zhuo');
+    await d.tap('skills-tab-ruo');
+    await d.tap('back');
+    await d.waitScene('Party');
+    assert.strictEqual(await d.page.evaluate(() => window.__BUXU__.game.top().hero), 'ruo');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('animations: every skill plays at every tier, with more on screen at each one', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, `${OPEN_ALL}; s.progress.stars = 1; s.settings.auto = false; ['cen','ruo','zhuo'].forEach((id) => { s.heroes[id].lv = 60; });`);
+    await go(d, 'road');
+    const report = [];
+    const skills = { cen: ['cut', 'flame', 'meteor', 'breaker', 'blaze'], ruo: ['mend', 'thorn', 'dew', 'rain', 'tide', 'revive'], zhuo: ['wall', 'quake', 'bronze', 'fall'] };
+    for (const hero of Object.keys(skills)) {
+      for (const id of skills[hero]) {
+        const row = { id, peak: [], dur: [] };
+        for (const lv of [1, 4, 7, 10]) {
+          const r = await d.page.evaluate(({ hero, id, lv }) => new Promise((ok) => {
+            const B = window.__BUXU__, g = B.game, s = B.store.get();
+            ['cen', 'ruo', 'zhuo'].forEach((h) => { s.heroes[h].skillLv = {}; });
+            s.heroes[hero].skillLv[id] = lv;
+            g.go('battle', { fight: { lv: 3, foes: ['vine', 'xiao'] }, chapter: 1, from: 'road' }, true);
+            const sc = g.top();
+            sc.runner = new g.Runner();
+            sc.mode = 'wait';
+            const b = sc.b, a = b.heroes.find((h) => h.id === hero);
+            a.mp = 99;
+            a.hp = Math.round(a.maxHp / 2);
+            const sk = b.skillOf(a, id);
+            let target = a;
+            if (sk.target === 'enemy') target = b.enemies[0];
+            if (sk.target === 'ko') { target = b.heroes.find((h) => h.id !== hero); target.alive = false; target.hp = 0; }
+            b.enemies.forEach((e) => { e.maxHp = 1e6; e.hp = 1e6; });
+            const ev = b.perform(a, { kind: 'skill', id, target });
+            sc.actor = a;
+            // The length of the choreography, summed from its own waits, so a slow machine cannot change it.
+            let waited = 0;
+            const counted = (function* (gen) {
+              for (const v of gen) {
+                if (typeof v === 'number') waited += v;
+                yield v;
+              }
+            }(sc.play(ev)));
+            const task = sc.runner.run(counted);
+            const P = CanvasRenderingContext2D.prototype, of = P.fillRect, od = P.drawImage;
+            let f = 0, o = 0, peak = 0;
+            // Only what reaches the game's own buffer. Baking a sprite for the first time is a one-off.
+            const screen = B.display.ctx;
+            P.fillRect = function (...x) { if (this === screen) f++; return of.apply(this, x); };
+            P.drawImage = function (...x) { if (this === screen) o++; return od.apply(this, x); };
+            const tick = () => {
+              peak = Math.max(peak, f + o);
+              f = 0;
+              o = 0;
+              if (task.done && !sc.sk.list.length) {
+                P.fillRect = of;
+                P.drawImage = od;
+                return ok({ peak, dur: waited });
+              }
+              return requestAnimationFrame(tick);
+            };
+            requestAnimationFrame(tick);
+          }), { hero, id, lv });
+          row.peak.push(r.peak);
+          row.dur.push(Math.round(r.dur * 100) / 100);
+        }
+        report.push(row);
+        // A peak-tier cast lasts longest and is the busiest: that is the point of reaching it.
+        assert.ok(row.dur[3] > row.dur[0], `${id}: ${row.dur.join(' ')} seconds`);
+        assert.ok(row.peak[3] > row.peak[0], `${id}: ${row.peak.join(' ')} draws at its peak`);
+        assert.ok(row.dur[0] < 1.4, `${id} at level 1 stays quick: ${row.dur[0]}s`);
+        assert.ok(row.dur[3] < 3.8, `${id} at its peak must not drag: ${row.dur[3]}s`);
+      }
+    }
+    report.forEach((r) => console.log(`        ${r.id.padEnd(8)} draws per frame ${r.peak.map((n) => String(n).padStart(4)).join(' ')}   seconds ${r.dur.map((n) => n.toFixed(2).padStart(5)).join(' ')}`));
+    const worst = Math.max(...report.map((r) => Math.max(...r.peak)));
+    assert.ok(worst <= 1200, `the busiest frame of any skill draws ${worst} things`);
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('animations: a real fight on auto, with everything at its top tier, finishes cleanly', async () => {
+    const d = await open(browser, { speed: 6 });
+    await prepare(d, `
+      ${OPEN_ALL};
+      s.progress.stars = 2; s.settings.auto = true; s.settings.speed = 3;
+      ['cen','ruo','zhuo'].forEach((id) => {
+        s.heroes[id].lv = 60; s.heroes[id].train = { hp: 20, atk: 20, def: 20, spd: 10 };
+        B.party.learned(id, 60).forEach((k) => { s.heroes[id].skillLv[k] = 10; });
+      });
+    `);
+    await go(d, 'battle', { fight: { lv: 13, foes: ['crow'] }, chapter: 1, from: 'road' });
+    await d.waitFor('win-continue', 60000);
+    const left = await d.page.evaluate(() => {
+      const sc = window.__BUXU__.game.top();
+      return { dimTo: sc.dimTo, cast: sc.cast };
+    });
+    assert.strictEqual(left.dimTo, 0, 'the field does not stay dark afterwards');
+    assert.strictEqual(left.cast, null);
     await d.assertClean();
     await d.ctx.close();
   });

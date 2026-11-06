@@ -19,6 +19,9 @@ function cached(key, make) {
   let v = sprites.get(key);
   if (!v) {
     v = atlas.add(make());
+    // A copy at another size, worked out pixel by pixel. Enlarging at draw time is up to the runtime's
+    // filtering, which can turn a crisp icon soft on a phone however it looks in DevTools.
+    v.resized = (w, h) => cached(`${key}:${w}x${h}`, () => make().resized(w, h));
     sprites.set(key, v);
   }
   return v;
@@ -162,7 +165,16 @@ module.exports = {
   letterBig: () => cached('lb', () => letterBig()),
   peach: () => cached('peach', () => station.peachSprite()),
   medallion: (col, ring) => cached(`md:${col}:${ring}`, () => medallion(col, ring)),
-  digits: (color) => cached(`d:${color}`, () => digitsGrid(color)),
+  // The damage digits at each size in use, so a big number is a plain copy rather than an enlargement.
+  digits: (color, k) => cached(`d:${color}:${k || 1}`, () => {
+    const g = digitsGrid(color);
+    return k > 1 ? g.resized(g.w * k, g.h * k) : g;
+  }),
+  // A line of text as one sprite, outlined and enlarged: the skill name on a cut-in.
+  bigLabel: (str, color, k) => cached(`bl:${str}:${color}:${k}`, () => {
+    const g = font.grid(str, parseInt(color.slice(1), 16), 1).outline(C.ink);
+    return g.resized(g.w * k, g.h * k);
+  }),
   disc: (r) => cached(`disc:${r}`, () => discGrid(r)),
   DIGIT_ORDER: Object.keys(DIGITS),
 

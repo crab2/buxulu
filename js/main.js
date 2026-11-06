@@ -18,6 +18,7 @@ require('./scenes/trials.js');
 require('./scenes/map.js');
 require('./scenes/battle.js');
 require('./scenes/party.js');
+require('./scenes/skills.js');
 require('./scenes/gear.js');
 require('./scenes/gacha.js');
 require('./scenes/ending.js');
@@ -90,7 +91,7 @@ welcomeBack();
 // WeChat's standard share menu. Sharing is never rewarded, because induced sharing is against platform rules.
 if (wx.showShareMenu) wx.showShareMenu({ withShareTicket: false });
 if (wx.onShareAppMessage) {
-  wx.onShareAppMessage(() => ({ title: '人不在,路也替你走着 ——《步虚录》' }));
+  wx.onShareAppMessage(() => ({ title: '人不在,路也替你走着 ——《步虚录》', imageUrl: D.shareImage() }));
 }
 
 // Steps are refreshed by WeChat when the player re-enters, which makes this the moment to read them.
@@ -128,7 +129,7 @@ store.pull().then((replaced) => {
 
 if (typeof GameGlobal !== 'undefined' && GameGlobal.__PREVIEW__) {
   GameGlobal.__BUXU__ = {
-    game, store, steps, clock, idle: Idle, art, chapters: require('./data/chapters.js'), ui: require('./core/ui.js'), font: require('./core/font.js'),
-    party: require('./systems/party.js'), gear: require('./systems/gear.js'), gacha: require('./systems/gacha.js'), gearData: require('./data/gear.js'),
+    game, store, steps, clock, idle: Idle, art, display: D, chapters: require('./data/chapters.js'), ui: require('./core/ui.js'), font: require('./core/font.js'),
+    party: require('./systems/party.js'), skills: require('./systems/skills.js'), gear: require('./systems/gear.js'), gacha: require('./systems/gacha.js'), gearData: require('./data/gear.js'),
   };
 }

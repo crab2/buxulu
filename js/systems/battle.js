@@ -134,8 +134,13 @@ class Battle {
     return Math.max(0, Math.round((sk.mp || 0) * (1 - (u.mods.mpCost || 0))));
   }
 
+  // A skill as this unit knows it. Heroes carry their trained levels, and enemies use the base table.
+  skillOf(u, id) {
+    return (u.sk && u.sk[id]) || D.SKILLS[id];
+  }
+
   canUse(u, id) {
-    const sk = D.SKILLS[id];
+    const sk = this.skillOf(u, id);
     if (u.mp < this.mpCost(u, sk)) return false;
     if (sk.target === 'ko') return this.heroes.some((h) => !h.alive);
     return true;
@@ -253,11 +258,13 @@ class Battle {
         this.doSkill(a, { name: '攻击', el: a.el, power: 1, target: 'enemy', fx: 'slash', pose: 'atk' }, action.target, ev);
         this.sharpen(a, ev);
         break;
-      case 'skill':
-        this.doSkill(a, D.SKILLS[action.id], action.target, ev, action.id);
-        this.echo(a, D.SKILLS[action.id], action.target, ev, action.id);
+      case 'skill': {
+        const sk = this.skillOf(a, action.id);
+        this.doSkill(a, sk, action.target, ev, action.id);
+        this.echo(a, sk, action.target, ev, action.id);
         this.sharpen(a, ev);
         break;
+      }
       case 'guard':
         a.statuses.guard = 1;
         a.mp = Math.min(a.maxMp, a.mp + Math.max(2, Math.round(a.maxMp * 0.12)));
@@ -283,7 +290,7 @@ class Battle {
 
   doSkill(a, sk, chosen, ev, id, free) {
     if (!free) a.mp = Math.max(0, a.mp - this.mpCost(a, sk));
-    ev.push({ type: 'use', actor: a, name: sk.name, pose: sk.pose, el: sk.el, fx: sk.fx, id, target: chosen, basic: !sk.mp && a.side === 'hero' });
+    ev.push({ type: 'use', actor: a, name: sk.name, pose: sk.pose, el: sk.el, fx: sk.fx, id, target: chosen, basic: !sk.mp && a.side === 'hero', tier: sk.tier || 0, lv: sk.lv || 1, area: sk.target, charged: !!sk.charge, support: !sk.power && !sk.heal && !sk.revive });
     if (sk.power) {
       if (sk.target.indexOf('random') === 0) {
         const n = Number(sk.target.split(':')[1]);
@@ -428,7 +435,7 @@ class Battle {
     const target = foes.slice().sort((a, b) => a.hp - b.hp)[0];
     let best = { kind: 'attack', target }, bestScore = D.elementMult(u.el, target.el);
     u.skills.forEach((id) => {
-      const sk = D.SKILLS[id];
+      const sk = this.skillOf(u, id);
       if (!sk.power || !this.canUse(u, id)) return;
       let score;
       if (sk.target === 'enemies') {

@@ -1,28 +1,25 @@
 // The game draws to a low-resolution buffer, then scales it up by a whole number so every art
 // pixel stays square on any phone. Width and height vary a little between devices, so layouts are
 // written relative to W, H and the safe-area insets below.
+const sizing = require('./sizing.js');
+const presenter = require('./present.js');
+
 const info = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync();
 const pr = info.pixelRatio || 1;
 
 const main = wx.createCanvas();
-const physW = Math.round(info.windowWidth * pr);
-const physH = Math.round(info.windowHeight * pr);
+const fit = sizing.fit(info.windowWidth, info.windowHeight, pr);
+const { physW, physH, scale, W, H } = fit;
 main.width = physW;
 main.height = physH;
-
-const TARGET_W = 270;
-const MIN_H = 470;
-const scale = Math.max(1, Math.min(Math.round(physW / TARGET_W), Math.floor(physH / MIN_H)));
-const W = Math.ceil(physW / scale);
-const H = Math.ceil(physH / scale);
 
 const back = wx.createCanvas();
 back.width = W;
 back.height = H;
 const ctx = back.getContext('2d');
-const mainCtx = main.getContext('2d');
 ctx.imageSmoothingEnabled = false;
-mainCtx.imageSmoothingEnabled = false;
+
+const screen = presenter.create(main, back, () => wx.createCanvas(), fit);
 
 const toLogical = (css) => (css * pr) / scale;
 
@@ -47,12 +44,24 @@ function setFps(fps) {
   if (wx.setPreferredFramesPerSecond) wx.setPreferredFramesPerSecond(fps);
 }
 
-function present() {
-  mainCtx.imageSmoothingEnabled = false;
-  mainCtx.drawImage(back, 0, 0, W * scale, H * scale);
+// Share cards default to a screenshot of the game, which a WebGL screen may not be able to give. The back
+// buffer is an ordinary canvas that always can. Returns nothing if the runtime cannot, and WeChat then
+// falls back to its own screenshot.
+function shareImage() {
+  try {
+    const height = Math.min(H, Math.round(W * 0.8));
+    return back.toTempFilePathSync({ x: 0, y: 0, width: W, height, destWidth: W * 2, destHeight: height * 2 });
+  } catch (e) {
+    return undefined;
+  }
 }
 
 module.exports = {
-  W, H, scale, ctx, back, present, setFps, safeTop, safeBottom, capTop, capBottom, capLeft, contentTop: capBottom + 4,
+  W, H, scale, ctx, back, setFps, safeTop, safeBottom, capTop, capBottom, capLeft, contentTop: capBottom + 4,
   touchX: (css) => toLogical(css), touchY: (css) => toLogical(css),
+  present: () => screen.draw(),
+  shareImage,
+  // What this device actually ended up with. The settings screen shows it, so a phone that looks wrong
+  // can be diagnosed without a debugger.
+  info: { mode: screen.mode, why: screen.why, smoothing: screen.smoothing, pr, physW, physH, bufW: screen.bufW, bufH: screen.bufH },
 };
