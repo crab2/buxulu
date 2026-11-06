@@ -24,7 +24,9 @@ require('./scenes/gacha.js');
 require('./scenes/ending.js');
 
 store.load();
+audio.setup();
 audio.configure(store.get().settings);
+wx.onTouchEnd(() => audio.keep());
 steps.init();
 steps.onPrivacyNeeded(O.privacyPrompt);
 
@@ -63,6 +65,7 @@ game.onTick = (dt) => {
   if (tick >= 1) {
     tick = 0;
     syncIdle();
+    audio.keep();
     if (!store.get().settings.smooth) setFps(Date.now() - game.lastTouch > IDLE_AFTER_MS ? 15 : 30);
   }
   if (saveTick >= 20) {
@@ -126,12 +129,15 @@ game.start();
 
 // A frozen picture looks the same whatever froze it, and a phone has neither a console nor a way to reach the
 // settings screen behind it. So a build that isn't released says once, in a native message that doesn't depend
-// on the canvas, how the frame is shown, how many frames have run and how many different errors they hit.
+// on the canvas, how the frame is shown, how many frames have run, how many different errors they hit and how
+// many milliseconds a frame takes to reach the screen. A second message then says what the music is doing.
 if (wx.showToast && !steps.isRelease()) {
   setTimeout(() => {
     const how = D.info.mode + (D.info.why ? ':' + D.info.why : '');
-    wx.showToast({ title: `${how} f${game.frames} e${game.errors.length}`, icon: 'none', duration: 4000 });
+    const ms = Math.round(game.presentMs / Math.max(1, game.frames));
+    wx.showToast({ title: `${how} f${game.frames} e${game.errors.length} p${ms}`, icon: 'none', duration: 4000 });
   }, 4000);
+  setTimeout(() => wx.showToast({ title: audio.report(), icon: 'none', duration: 4000 }), 8500);
 }
 store.pull().then((replaced) => {
   if (replaced) audio.configure(store.get().settings);
@@ -139,7 +145,7 @@ store.pull().then((replaced) => {
 
 if (typeof GameGlobal !== 'undefined' && GameGlobal.__PREVIEW__) {
   GameGlobal.__BUXU__ = {
-    game, store, steps, clock, idle: Idle, art, display: D, chapters: require('./data/chapters.js'), ui: require('./core/ui.js'), font: require('./core/font.js'),
+    game, store, steps, clock, audio, idle: Idle, art, display: D, chapters: require('./data/chapters.js'), ui: require('./core/ui.js'), font: require('./core/font.js'),
     party: require('./systems/party.js'), skills: require('./systems/skills.js'), gear: require('./systems/gear.js'), gacha: require('./systems/gacha.js'), gearData: require('./data/gear.js'),
   };
 }

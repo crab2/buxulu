@@ -118,7 +118,7 @@ class Altar {
   }
   drawStride(y, view, m, w) {
     const today = view.today;
-    ui.panel(m, y, w, 66);
+    ui.panel(m, y, w, 72);
     ui.text('今日神行', m + 10, y + 7, UI.gold);
     const bonus = W_.STRIDE.reduce((b, t) => (today.steps >= t.steps ? t.bonus : b), 0);
     ui.text(bonus ? `行军与收益 +${Math.round(bonus * 100)}%` : '走得越多,今天路上越快', W - m - 10, y + 7, bonus ? UI.jade : UI.dim, { align: 'r' });
@@ -132,10 +132,10 @@ class Altar {
       ui.img(art.icon(claimed ? 'star' : 'chest'), x + seg / 2 - 8, y + 22);
       ui.alpha(1);
       const lbl = ms.steps >= 10000 ? ms.steps / 10000 + '万' : ms.steps / 1000 + '千';
-      ui.text(lbl, x + seg / 2 - 12, y + 42, reached ? UI.text : UI.faint);
-      ui.text(`+${Math.round(W_.STRIDE[i].bonus * 100)}%`, x + seg / 2 + 12, y + 42, reached ? UI.jade : UI.faint, { align: 'r' });
+      ui.text(lbl, x + seg / 2, y + 40, reached ? UI.text : UI.dim, { align: 'c' });
+      ui.text(`+${Math.round(W_.STRIDE[i].bonus * 100)}%`, x + seg / 2, y + 53, reached ? UI.jade : UI.dim, { align: 'c' });
     });
-    return y + 70;
+    return y + 76;
   }
   drawUses(y, s, m, w) {
     const now = clock.now();

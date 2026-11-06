@@ -175,7 +175,7 @@ class Settings {
     ui.alpha(0.6);
     ui.rect(0, 0, W, H, '#000000');
     ui.alpha(1);
-    const w = W - 32, x = 16, rowsH = 28 * 8 + 98;
+    const w = W - 32, x = 16, rowsH = 28 * 8 + 111;
     const y = Math.round((H - rowsH) / 2);
     ui.panel(x, y, w, rowsH);
     ui.text('设置', W / 2, y + 10, UI.gold, { align: 'c' });
@@ -205,7 +205,7 @@ class Settings {
       label: '清除本机存档', kind: 'danger',
       onTap: () => O.modal({
         title: '清除存档?', text: '本机的进度将被清除且无法恢复。已经兑换过的步数不能再次兑换。',
-        buttons: [{ label: '取消' }, { label: '清除', kind: 'danger', onTap: () => { store.reset(); game.stack = []; game.go('title', null, true); } }],
+        buttons: [{ label: '取消' }, { label: '清除', kind: 'danger', onTap: () => { store.reset(); audio.configure(store.get().settings); game.stack = []; game.go('title', null, true); } }],
       }),
     });
     cy += 30;
@@ -215,6 +215,7 @@ class Settings {
     const filter = di.smoothing === null ? '?' : di.smoothing ? 'smooth' : 'nearest';
     ui.text(`${di.mode}${di.why ? ':' + di.why : ''} x${D.scale} ${W}x${H}`, W / 2, cy + 13, UI.faint, { align: 'c' });
     ui.text(`${di.physW}x${di.physH} pr${di.pr} ${filter}`, W / 2, cy + 26, UI.faint, { align: 'c' });
+    ui.text(audio.report(), W / 2, cy + 39, UI.faint, { align: 'c' });
     ui.button('set-close', x + 12, y + rowsH - 26, w - 24, 22, { label: '关闭', kind: 'ghost', sound: 'back', onTap: () => game.pop(this) });
   }
 }

@@ -138,8 +138,15 @@ async function assertTidy(d, where) {
       const { texts, boxes } = B.ui.state;
       const out = [];
       const W = B.ui.W;
-      texts.forEach((t) => {
+      texts.forEach((t, i) => {
         if (t.x < -1 || t.x + t.w > W + 1) out.push(`"${t.str}" runs off the screen (x ${Math.round(t.x)}..${Math.round(t.x + t.w)} of ${W})`);
+        texts.slice(i + 1).forEach((u) => {
+          // Fixed bars are drawn over a list that scrolls under them, which hides what is in the way.
+          if (t.clipped !== u.clipped) return;
+          const ox = Math.min(t.x + t.w, u.x + u.w) - Math.max(t.x, u.x);
+          const oy = Math.min(t.y + t.h, u.y + u.h) - Math.max(t.y, u.y);
+          if (ox > 1 && oy > 3) out.push(`"${t.str}" is printed over "${u.str}"`);
+        });
         boxes.forEach((b) => {
           // A list runs on under the fixed bars. A button scrolled out of its clip cannot touch what is drawn over it.
           if (b.clip && !t.clipped && (t.y + t.h <= b.clip.y || t.y >= b.clip.y + b.clip.h)) return;
@@ -1524,7 +1531,7 @@ async function assertOnScreen(d, where) {
 
   // ---- The picture reaching the screen ----
   // Compares a whole frame on the visible canvas with a perfect block upscale of the buffer it came from.
-  // Reading inside the frame is what makes this reliable: a WebGL canvas may be cleared once it is composited.
+  // A buffer that froze would match a screen that froze, so tests that care also compare `picture` between reads.
   const readScreen = (d) => d.page.evaluate(() => new Promise((ok) => {
     const D = window.__BUXU__.display, real = D.present;
     D.present = function () {
@@ -1537,19 +1544,12 @@ async function assertOnScreen(d, where) {
       }
       const cv = document.getElementById('game');
       const pw = cv.width, ph = cv.height;
-      let px, bottomUp = false;
-      if (D.info.mode === 'webgl') {
-        const gl = cv.getContext('webgl');
-        px = new Uint8Array(pw * ph * 4);
-        gl.readPixels(0, 0, pw, ph, gl.RGBA, gl.UNSIGNED_BYTE, px);
-        bottomUp = true;
-      } else px = cv.getContext('2d').getImageData(0, 0, pw, ph).data;
+      const px = cv.getContext('2d').getImageData(0, 0, pw, ph).data;
       const back = D.ctx.getImageData(0, 0, D.W, D.H).data;
       let wrong = 0, lit = 0, picture = 0;
       for (let y = 0; y < ph; y++) {
-        const row = bottomUp ? ph - 1 - y : y;
         for (let x = 0; x < pw; x++) {
-          const a = (row * pw + x) * 4;
+          const a = (y * pw + x) * 4;
           const b = (Math.floor(y / D.scale) * D.W + Math.floor(x / D.scale)) * 4;
           if (Math.abs(px[a] - back[b]) > 2 || Math.abs(px[a + 1] - back[b + 1]) > 2 || Math.abs(px[a + 2] - back[b + 2]) > 2) wrong++;
           if (px[a] + px[a + 1] + px[a + 2] > 30) lit++;
@@ -1568,7 +1568,7 @@ async function assertOnScreen(d, where) {
       await go(d, scene);
       await d.page.waitForTimeout(300);
       const r = await readScreen(d);
-      assert.strictEqual(r.mode, 'webgl');
+      assert.strictEqual(r.mode, 'exact');
       assert.strictEqual(r.wrong, 0, `${scene}: ${(r.wrong * 100).toFixed(2)}% of pixels differ`);
       assert.ok(r.lit > 0.3, `${scene} should not be blank`);
     }
@@ -1583,87 +1583,85 @@ async function assertOnScreen(d, where) {
     await d.page.waitForTimeout(300);
     const r = await readScreen(d);
     assert.strictEqual(r.smoothing, true, 'the self-test notices this kind of phone');
-    assert.strictEqual(r.mode, 'webgl');
+    assert.strictEqual(r.mode, 'exact');
     assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
     await d.assertClean();
     await d.ctx.close();
   });
 
-  await check('sharp picture: this test really does catch blur, on the path the fix replaced', async () => {
-    const d = await open(browser, { speed: 3, query: '?smoothing=ignored&webgl=none' });
+  await check('sharp picture: this test really does catch blur, on the fallback that relies on the flag', async () => {
+    const d = await open(browser, { speed: 3, query: '?smoothing=ignored&pixels=broken' });
     await prepare(d, OPEN_ALL);
     await go(d, 'road');
     await d.page.waitForTimeout(300);
     const r = await readScreen(d);
-    assert.strictEqual(r.mode, '2d');
+    assert.strictEqual(r.mode, 'flag');
     assert.ok(r.wrong > 0.01, `expected visible blur here, found ${(r.wrong * 100).toFixed(2)}%`);
     await d.ctx.close();
   });
 
-  await check('sharp picture: a phone with WebGL only on the on-screen canvas still gets square pixels', async () => {
-    const d = await open(browser, { speed: 3, query: '?smoothing=ignored&webgl=onscreen' });
-    await prepare(d, OPEN_ALL);
-    await go(d, 'road');
-    await d.page.waitForTimeout(300);
-    const r = await readScreen(d);
-    assert.strictEqual(r.mode, 'webgl', `fell back to 2D: ${r.why}`);
-    assert.strictEqual(r.why, '');
-    assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
-    assert.ok(r.lit > 0.3, 'something is on the screen');
-    await d.assertClean();
-    await d.ctx.close();
-  });
-
-  // Each of these passed a self-test that uploaded only once, and the last three left the first frame on screen
-  // for good with the game still running behind it. Matching the buffer isn't enough on its own, because a buffer
-  // that froze matches a screen that froze, so the picture also has to change between two screens.
-  for (const [label, flag] of [
-    ['does nothing', 'blank'],
-    ['comes out upside down', 'flipped'],
-    ['repeats its first frame forever', 'stale'],
-    ['throws after the first time', 'throwing'],
-    ['stops the canvas being drawn on', 'locks'],
-  ]) {
-    await check(`live picture: a canvas upload that ${label} cannot stop the screen updating`, async () => {
-      const d = await open(browser, { speed: 3, query: `?webgl=${flag}` });
-      await prepare(d, OPEN_ALL);
-      await go(d, 'party');
-      await d.waitScene('Party');
-      const seen = [];
-      for (const where of ['party', 'road']) {
-        if (where === 'road') {
-          await d.tap('nav-road');
-          await d.waitScene('Road');
-        }
-        const r = await readScreen(d);
-        assert.strictEqual(r.mode, 'webgl');
-        assert.strictEqual(r.why, '');
-        assert.strictEqual(r.wrong, 0, `${where}: ${(r.wrong * 100).toFixed(2)}% of pixels differ`);
-        assert.ok(r.lit > 0.3, 'something is on the screen');
-        seen.push(r.picture);
-      }
-      assert.notStrictEqual(seen[0], seen[1], 'the picture changed between the two screens');
-      await d.assertClean();
-      await d.ctx.close();
-    });
-  }
-
-  await check('live picture: a phone where copying pixels fails hands over the canvas and says so', async () => {
-    const d = await open(browser, { speed: 3, query: '?webgl=nopixels' });
+  await check('sharp picture: a phone that cannot write pixels falls back to a picture that still moves', async () => {
+    const d = await open(browser, { speed: 3, query: '?pixels=broken' });
     await prepare(d, OPEN_ALL);
     await go(d, 'party');
     await d.waitScene('Party');
-    const r = await readScreen(d);
-    assert.strictEqual(r.mode, 'webgl');
-    assert.strictEqual(r.why, 'canvas');
-    assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
+    const party = await readScreen(d);
+    assert.strictEqual(party.mode, 'flag');
+    assert.strictEqual(party.wrong, 0, 'where the flag works, the fallback is exact too');
+    assert.ok(party.lit > 0.3, 'something is on the screen');
+    await d.tap('nav-road');
+    await d.waitScene('Road');
+    const road = await readScreen(d);
+    assert.notStrictEqual(party.picture, road.picture, 'the picture changed');
     await d.assertClean();
     await d.ctx.close();
   });
 
-  await check('live picture: the self-test does not trust a canvas upload that only works the first time', async () => {
-    const d = await open(browser, { speed: 3, query: '?webgl=nopixels,stale' });
-    assert.strictEqual((await readScreen(d)).why, 'unverified');
+  await check('sharp picture: a phone that gets partial writes wrong writes whole frames instead', async () => {
+    const d = await open(browser, { speed: 3, query: '?pixels=whole&smoothing=ignored' });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'party');
+    await d.waitScene('Party');
+    const party = await readScreen(d);
+    assert.strictEqual(party.mode, 'exact');
+    assert.strictEqual(party.why, 'full');
+    assert.strictEqual(party.wrong, 0, `${(party.wrong * 100).toFixed(2)}% of pixels differ`);
+    await d.tap('nav-road');
+    await d.waitScene('Road');
+    const road = await readScreen(d);
+    assert.strictEqual(road.wrong, 0, `${(road.wrong * 100).toFixed(2)}% of pixels differ`);
+    assert.notStrictEqual(party.picture, road.picture, 'the picture changed');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('live picture: the screen keeps moving on its own, and follows a change of screen', async () => {
+    const d = await open(browser);
+    const seen = new Set();
+    for (let i = 0; i < 4; i++) {
+      const r = await readScreen(d);
+      assert.strictEqual(r.wrong, 0, `read ${i}: ${(r.wrong * 100).toFixed(2)}% of pixels differ`);
+      seen.add(r.picture);
+      await d.page.waitForTimeout(250);
+    }
+    assert.ok(seen.size >= 3, `the title screen should animate, but showed ${seen.size} pictures in 4 reads`);
+    await d.tap('title-start');
+    await d.page.waitForFunction(() => window.__BUXU__.game.top().constructor.name !== 'Title', null, { timeout: 8000 });
+    await d.page.waitForTimeout(400);
+    const after = await readScreen(d);
+    assert.strictEqual(after.wrong, 0, 'the screen after the tap matches the buffer');
+    assert.ok(!seen.has(after.picture), 'the tap reached the screen');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('live picture: the on-screen canvas is 2D, so the WebGL freeze cannot come back', async () => {
+    const d = await open(browser);
+    const kinds = await d.page.evaluate(() => {
+      const cv = document.getElementById('game');
+      return { twoD: !!cv.getContext('2d'), webgl: !!cv.getContext('webgl') };
+    });
+    assert.deepStrictEqual(kinds, { twoD: true, webgl: false });
     await d.ctx.close();
   });
 
@@ -1671,29 +1669,16 @@ async function assertOnScreen(d, where) {
     const d = await open(browser);
     await d.page.waitForFunction(() => window.__wxMock.toast, null, { timeout: 8000 });
     const message = await d.page.evaluate(() => window.__wxMock.toast);
-    const m = /^webgl f(\d+) e0$/.exec(message);
+    const m = /^exact f(\d+) e0 p(\d+)$/.exec(message);
     assert.ok(m && Number(m[1]) > 1, `unexpected report: ${message}`);
+    // Then what the music is doing, once that message has had its time on screen.
+    await d.page.waitForFunction(() => window.__wxMock.toast.startsWith('bgm '), null, { timeout: 8000 });
+    assert.ok(/^bgm title on t\d+ file\? e- s-$/.test(await d.page.evaluate(() => window.__wxMock.toast)));
     await d.ctx.close();
     const released = await open(browser, { query: '?env=release' });
     await released.page.waitForTimeout(4500);
     assert.strictEqual(await released.page.evaluate(() => window.__wxMock.toast), undefined, 'a released build stays quiet');
     await released.ctx.close();
-  });
-
-  await check('sharp picture: no WebGL at all falls back to 2D rather than a black screen', async () => {
-    const d = await open(browser, { speed: 3, query: '?webgl=none' });
-    await prepare(d, OPEN_ALL);
-    await go(d, 'party');
-    await d.waitScene('Party');
-    const r = await readScreen(d);
-    assert.strictEqual(r.mode, '2d');
-    assert.strictEqual(r.why, 'no-webgl');
-    assert.strictEqual(r.wrong, 0, 'where the flag works, 2D is exact too');
-    assert.ok(r.lit > 0.3, 'something is on the screen');
-    await d.tap('nav-road');
-    await d.waitScene('Road');
-    await d.assertClean();
-    await d.ctx.close();
   });
 
   await check('sharp picture: enlarged numbers, text and icons stay crisp whatever the runtime filters', async () => {
@@ -1743,7 +1728,7 @@ async function assertOnScreen(d, where) {
         ok(B.ui.state.texts.map((t) => t.str));
       }));
     }));
-    assert.ok(texts.some((t) => /^webgl x\d+ \d+x\d+$/.test(t)), texts.join(' | '));
+    assert.ok(texts.some((t) => /^exact x\d+ \d+x\d+$/.test(t)), texts.join(' | '));
     assert.ok(texts.some((t) => /^\d+x\d+ pr[\d.]+ nearest$/.test(t)), texts.join(' | '));
     await assertTidy(d, 'settings');
     await d.assertClean();
@@ -1913,6 +1898,103 @@ async function assertOnScreen(d, where) {
     });
     assert.strictEqual(left.dimTo, 0, 'the field does not stay dark afterwards');
     assert.strictEqual(left.cast, null);
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  for (const [name, viewport, dpr] of SIZES) {
+    await check(`today's stride at ${name}: every stage says its steps and its bonus without overlapping`, async () => {
+      const d = await open(browser, { viewport, dpr, query: `?dpr=${dpr}&fill=1` });
+      await prepare(d, 'B.steps.mockAddSteps(7000)');
+      await go(d, 'altar');
+      await d.page.waitForTimeout(400);
+      if ((await d.scene()) === 'Modal') await d.closeModals();
+      await assertTidy(d, 'altar with steps');
+      const seen = await d.page.evaluate(() => new Promise((ok) => {
+        const B = window.__BUXU__;
+        B.ui.state.debug = true;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const t = B.ui.state.texts.map((x) => x.str);
+          B.ui.state.debug = false;
+          ok(t);
+        }));
+      }));
+      ['3千', '6千', '1万', '1.5万', '+5%', '+10%', '+15%', '+20%'].forEach((str) => assert.ok(seen.includes(str), `${str} is on screen, so the check above covered it`));
+      await d.assertClean();
+      await d.ctx.close();
+    });
+  }
+
+  // What the music's real audio objects are doing, by file name.
+  const music = (d) => d.page.evaluate(() => {
+    const name = (a) => Object.keys(window.__AUDIO__).find((k) => window.__AUDIO__[k] === a.src) || '';
+    return window.__wxMock.audio.filter((a) => /bgm_/.test(name(a))).filter((a) => !a.paused).map((a) => name(a).replace(/.*bgm_|\.mp3/g, ''));
+  });
+  const musicIs = async (d, want, why) => {
+    const t0 = Date.now();
+    let now = [];
+    while (Date.now() - t0 < 5000) {
+      now = await music(d);
+      if (now.join() === want.join()) return;
+      await d.page.waitForTimeout(60);
+    }
+    assert.deepStrictEqual(now, want, why);
+  };
+
+  await check('music: one tune at a time through tabs, a call, the background and the switch', async () => {
+    const d = await open(browser);
+    await musicIs(d, ['title'], 'plays on the title screen');
+    assert.strictEqual(await d.page.evaluate(() => window.__wxMock.audioOption), undefined, 'the mute switch stays in charge');
+    await prepare(d, '');
+    for (const tab of ['road', 'party', 'station', 'trials', 'altar']) {
+      await go(d, tab);
+      await musicIs(d, ['road'], `the road tune plays on ${tab}`);
+    }
+    const before = await d.page.evaluate(() => window.__wxMock.audio.length);
+    await go(d, 'road');
+    await d.page.evaluate(() => window.__wxMock.interrupt(true));
+    await musicIs(d, [], 'a call stops everything');
+    await d.page.evaluate(() => window.__wxMock.interrupt(false));
+    await musicIs(d, ['road'], 'and it comes back without a touch');
+    await d.page.evaluate(() => window.__wxMock.fire('hide'));
+    await musicIs(d, [], 'silent in the background');
+    await d.page.evaluate(() => window.__wxMock.fire('show'));
+    await musicIs(d, ['road'], 'back with the game');
+    assert.strictEqual(await d.page.evaluate(() => window.__wxMock.audio.length), before, 'nothing piles up');
+    await d.page.evaluate(() => window.__BUXU__.game.go('station', null, true));
+    await d.page.evaluate(() => window.__BUXU__.game.push('settings'));
+    await d.tap('set-bgm');
+    await musicIs(d, [], 'the switch turns it off');
+    await d.page.evaluate(() => window.__wxMock.fire('show'));
+    await d.page.waitForTimeout(1300);
+    assert.deepStrictEqual(await music(d), [], 'and nothing turns it back on behind the player\'s back');
+    assert.ok((await d.page.evaluate(() => window.__BUXU__.audio.report())).startsWith('set0 '));
+    await d.tap('set-bgm');
+    await musicIs(d, ['road'], 'and on again');
+    assert.ok((await d.page.evaluate(() => window.__BUXU__.audio.report())).startsWith('bgm road on '));
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('music: starts by itself on a phone that ignores autoplay and an early play()', async () => {
+    const d = await open(browser, { query: '?audio=late' });
+    await musicIs(d, ['title'], 'plays although the first requests went nowhere');
+    await prepare(d, '');
+    await go(d, 'road');
+    await musicIs(d, ['road']);
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('music: a phone that cannot load a file loses only the sound, and says so', async () => {
+    const d = await open(browser, { query: '?audio=broken' });
+    await prepare(d, '');
+    await go(d, 'road');
+    await d.page.waitForTimeout(600);
+    assert.deepStrictEqual(await music(d), []);
+    assert.ok(/^bgm road off t0 file\? e[^-]/.test(await d.page.evaluate(() => window.__BUXU__.audio.report())), 'the error code is on the report');
+    await d.tap('nav-station');
+    await d.waitScene('Station');
     await d.assertClean();
     await d.ctx.close();
   });

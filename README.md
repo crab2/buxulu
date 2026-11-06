@@ -216,25 +216,39 @@ The game draws to a low-resolution buffer, around 293×633, and enlarges it by a
 
 Three things now keep the picture square whatever the runtime does:
 
-- **WebGL shows the frame.** The buffer's pixels are copied into a texture every frame, and the texture uses `NEAREST` filtering, which the GPU follows on every device. Before the first frame, the on-screen canvas draws a small known pattern twice, in a different order each time, and reads it back, exact to the pixel. If copying fails that test, the game hands the canvas to WebGL instead. Only a phone that offers no WebGL at all uses 2D.
+- **The frame is enlarged in code.** Each row of the buffer that changed is enlarged by a whole number and written with `putImageData`, which never filters, into an off-screen canvas of the screen's exact size. That canvas is drawn to the screen at 1:1, so nothing is scaled at the last step. Before the first frame, spare canvases run this same code for two frames and read the result back, exact to the pixel. A phone where partial writes fail writes whole frames instead (`exact:full`). A phone where this can't work at all goes back to `drawImage` with the smoothing flag (`flag`), which may blur but still moves.
 - **Nothing kept on screen is enlarged at draw time.** Damage digits, big text and doubled icons are baked at their final size. Only sizes that change every frame, such as a card turning over, are still scaled by the runtime.
 - **The canvas matches the panel.** Android reports whole CSS pixels with a fractional ratio, so a 1080-wide panel at 2.75 comes back as 393, which multiplies to 1080.75. A canvas one pixel too wide gets resampled by the phone's compositor, so the width now snaps to the panel's real size (`js/core/sizing.js`).
 
-**Why the self-test uses the real canvas.** The first version tested on a spare canvas, so a failure could still fall back to 2D. But [weapp-adapter's notes](https://www.github.com/finscn/weapp-adapter) say off-screen canvases effectively don't support WebGL. That note is old and unconfirmed. If it still holds, the spare-canvas test would have failed on phones and left the blur in place, while every test here passed. The trade-off is that a canvas keeps the first kind of context it is given, so there is no 2D to return to once WebGL is taken. A phone that offers WebGL and then can't draw with it would show a black screen. WebGL game engines on WeChat draw on this same canvas, so that should be rare, but only a real phone can confirm it.
+**Why not WebGL.** A WebGL texture with `NEAREST` filtering was tried first, and it was sharp on a real phone. But the picture stayed on its first frame, with the music and tap sounds carrying on. Copying pixels into the texture made no difference, and the toast below read `webgl f108 e0`: the game was running at about 27 frames a second with no errors, and its self-test had passed. So the frames were being produced and not reaching the screen. The cause is still unknown. Code can't see this failure, so it can't fall back when it happens, and a canvas can't return to 2D once it has WebGL. A 2D screen has always moved on that phone, so the on-screen canvas now stays 2D, and a test fails if that changes.
 
-**Why the frame's canvas isn't handed to WebGL.** A build that preferred handing it over stayed on the first frame on a real phone, sharp, while the music and tap sounds carried on, which points to the game still running behind the picture. A self-test that uploads a fresh canvas once can't see this kind of failure, because the game uploads the same canvas every frame. Exactly what the phone does wrong hasn't been confirmed. On the stand-in, three different behaviours produce this same freeze and all pass a one-upload test: an upload that repeats the first frame, one that throws from the second time, and one that stops the canvas accepting more drawing. Copying the pixels avoids all three, because the game never passes its canvas to the upload. The cost is a read of about 724 KB per frame, and a test in headless Chromium put it at 2.8 ms a frame against 2.3 ms, which says little about a phone.
+If this route ever proves too slow on a phone, the untested lead is `preserveDrawingBuffer: true`. A [WebKit desktop app](https://github.com/basilelt/overseer/pull/104) with a very similar symptom (one frame kept showing, while `readPixels` was correct and there were no errors) was fixed that way, though that is a different runtime and its trigger was a canvas resize. Only a real phone can show whether it applies here.
 
-**To check a phone:** the bottom of the settings screen says what it ended up with, for example `webgl x4 293x633` and `1170x2532 pr3 nearest`. A frozen picture can't reach that screen, so a build that isn't released also shows a native toast about 4 seconds in, for example `webgl f120 e0`. That is how the frame is shown, the frames run so far and the number of different errors they hit. A high frame count under a stuck picture means the game is running and the problem is in getting the frame to the screen. A count near 1 means the frame loop stopped.
+**What it costs.** Reading the buffer takes about 724 KB per frame, and the screen-sized canvas and its pixels take about 24 MB in all on a 1170×2532 screen. In the running game on a 2-core VM with software rendering, a frame took 3 to 7 ms to reach the screen, or 14 to 20 ms with the JIT turned off, which is a rough stand-in for a phone runtime that has none. The game's loop still ran at 38 to 46 frames a second then, above its target of 30. None of this has been measured on a phone.
+
+**To check a phone:** the bottom of the settings screen says what it ended up with, for example `exact x4 293x633` and `1170x2532 pr3 nearest`. A frozen picture can't reach that screen, so a build that isn't released also shows a native toast about 4 seconds in, for example `exact f120 e0 p5`. That is how the frame is shown, the frames run so far, the number of different errors they hit and the average milliseconds a frame takes to reach the screen. About 120 frames at that point means a steady 30 a second. A count near 1 under a stuck picture means the frame loop stopped.
+
+**To check the music on a phone:** a second toast about 8.5 seconds in, and the last line of the settings screen, say what the music is doing, for example `bgm road on t12 file1 e- s-`.
 
 | Part | Meaning |
 |---|---|
-| `webgl` | The sharp path, copying pixels, and the self-test passed |
-| `webgl:canvas` | The sharp path by handing over the canvas, because copying failed the self-test and this route passed it |
-| `webgl:unverified` | WebGL is in use and copying pixels, but neither route passed. If the picture looks right and keeps moving, only the read-back failed |
-| `2d:no-webgl` or `2d:setup-failed` | The old path, which may blur, and why it was used |
+| `set0` at the start | The music switch in settings is off |
+| `on` / `off` / `int` | The phone reports it playing, not playing, or interrupted by something like a call |
+| `t12` | Seconds into the tune. A number that climbs means it really is playing |
+| `file1` / `file0` | Whether the phone can find the file in the package. `?` means it can't check |
+| `e-` / `e10003` | The tune's last error from the phone |
+| `s-` / `s10003` | The last error from any sound effect |
+
+If it says `on` with a climbing `t` and nothing can be heard, the game is doing its part, and the phone's mute switch and media volume are the next things to check.
+
+| Part | Meaning |
+|---|---|
+| `exact` | Enlarged in code, and the self-test passed. This is the sharp path |
+| `exact:full` | The same, but writing whole frames, because writing part of an image failed the self-test |
+| `flag` | The self-test failed, so the picture relies on the smoothing flag and may blur |
 | `x4 293x633` | The whole-number scale and the buffer size |
 | `1170x2532 pr3` | The canvas size and the ratio WeChat reported |
-| `nearest` or `smooth` | Whether this phone's 2D canvas obeys the smoothing flag. `smooth` with `webgl` means the fix is what is keeping it sharp |
+| `nearest` or `smooth` | Whether this phone's 2D canvas obeys the smoothing flag. `smooth` with `exact` means enlarging in code is what is keeping it sharp |
 
 ## Art: drawn in code, on a budget
 
@@ -301,7 +315,7 @@ tools/                Font subsetter, audio generator, web preview bundler and w
 tests/                Offline tests, balance simulation, browser end-to-end tests
 ```
 
-The package is about 1.8 MB, against WeChat's 4 MB main package limit. `packOptions` in `project.config.json` keeps `tools/`, `tests/`, `dist/` and `node_modules/` out of the upload.
+The package is about 1.8 MB, against WeChat's 4 MB main package limit. `packOptions` in `project.config.json` keeps `tools/`, `tests/`, `dist/` and `node_modules/` out of the upload and always includes `assets/audio/`. WeChat's filter for unused files is off, because its docs don't say what it does with a sound the code picks at run time.
 
 Saves from the turn-based version upgrade automatically. Progress and Stardust carry over, and training tiers double, because each tier is now half as strong.
 
@@ -328,10 +342,11 @@ The end-to-end suite needs a Chromium build. It finds one in the Playwright cach
 Everything above ran against a browser stand-in for the WeChat runtime (`tools/wx-shim.js`) and a fake cloud backend. These still need a real run:
 
 - The game on a real WeChat client, on iOS and Android, including time away with the game truly closed.
-- **The sharpness fix on a real phone.** The blur was reproduced on a stand-in that ignores the smoothing flag, and no source could confirm that this is what WeChat's runtime does. The fix doesn't depend on it, and the settings screen reports what the phone actually did. Still to measure there: whether the settings screen says plain `webgl`, the frame rate with pixels copied every frame, and whether the share card looks right.
-- **The frozen-picture fix on a real phone.** The freeze was seen on a phone and reproduced only on a stand-in, so what the phone actually does wrong is still unconfirmed, and the fix needs a real run to prove itself. If the picture still sticks while the toast shows `webgl` and a high frame count, the canvas upload wasn't the cause.
+- **The sharpness fix on a real phone.** The blur was reproduced on a stand-in that ignores the smoothing flag, and no source could confirm that this is what WeChat's runtime does. The fix doesn't depend on it, and the settings screen reports what the phone actually did. Still to measure there: whether the settings screen says plain `exact`, the frame rate with frames enlarged in code, and whether the share card looks right.
+- **The frozen picture on a real phone.** It has only been seen on a phone with WebGL, and its cause is unknown. The on-screen canvas no longer uses WebGL, and this new route still needs a real run to confirm that the picture moves and stays sharp.
 - The real WeRun, privacy and cloud calls. The API shapes follow the official docs, but no live call has been made.
 - `putImageData`, `multiply` blending, `wx.setPreferredFramesPerSecond`, `wx.setKeepScreenOn` and `wx.onMemoryWarning` on real devices. Each has a feature check or fallback, so a gap should mean a plainer or slower result rather than a crash.
-- Audio. The files decode and aren't silent or clipped, but nobody has listened to them yet.
+- **Music on a real phone.** It was reported missing on a phone, and it plays correctly in the browser, so the cause isn't known. The game now restarts the music after a call or a stopped loop, keeps asking until the phone says it's playing, and forces the audio files into the package. An iPhone on mute stays silent on purpose. The report under "To check a phone" says which of these it was, if none of them fixes it.
+- Audio quality. The files decode and aren't silent or clipped, but nobody has listened to them yet.
 - Frame rate and heat on low-end phones. The draw-call and memory figures above are measured in a browser, not on a phone.
 - Real players. The pacing comes from simulated players, so the numbers will need tuning once people actually play. That goes double for the draw: how it feels, how many letters feel like enough, and whether the set effects are worth building around. The odds and costs all live in `js/data/gear.js`.

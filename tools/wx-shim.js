@@ -15,50 +15,21 @@
   const params = new URLSearchParams(location.search);
   // Behaviour a real phone may have and desktop Chromium does not, so tests can see what the game does there.
   // smoothing=ignored: the 2D canvas filters however it is asked.
-  // webgl takes a comma-separated list:
-  //   none: no WebGL at all. onscreen: WebGL exists only on the on-screen canvas, as has been reported of WeChat.
-  //   blank, flipped: uploading a canvas does nothing, or comes out upside down.
-  //   stale: every upload of a canvas repeats its first upload, so the first frame stays on screen forever.
-  //   throwing: a canvas uploads once, and every later upload of it throws.
-  //   locks: uploading a canvas freezes it, so later 2D drawing on it has no effect.
-  //   nopixels: uploading raw pixels does nothing.
-  const webgl = new Set((params.get('webgl') || '').split(','));
+  // pixels=broken: putImageData does nothing. pixels=whole: its longer form, which writes part of an image, does nothing.
+  const pixels = params.get('pixels');
   if (params.get('smoothing') === 'ignored') {
     Object.defineProperty(CanvasRenderingContext2D.prototype, 'imageSmoothingEnabled', { get: () => true, set() {} });
   }
-  if (webgl.has('none') || webgl.has('onscreen')) {
-    const realContext = HTMLCanvasElement.prototype.getContext;
-    HTMLCanvasElement.prototype.getContext = function (type, o) {
-      const refused = type === 'webgl' && (webgl.has('none') || this.id !== 'game');
-      return refused ? null : realContext.call(this, type, o);
+  if (pixels === 'broken' || pixels === 'whole') {
+    const realPut = CanvasRenderingContext2D.prototype.putImageData;
+    CanvasRenderingContext2D.prototype.putImageData = function (...args) {
+      if (pixels === 'broken' || args.length > 3) return undefined;
+      return realPut.apply(this, args);
     };
   }
-  if (['blank', 'flipped', 'stale', 'throwing', 'locks', 'nopixels'].some((f) => webgl.has(f))) {
-    const realUpload = WebGLRenderingContext.prototype.texImage2D;
-    const seen = new WeakMap(); // Each canvas's copy of its first upload.
-    WebGLRenderingContext.prototype.texImage2D = function (...args) {
-      if (args.length === 9) return webgl.has('nopixels') ? undefined : realUpload.apply(this, args); // Raw pixels carry their size; a canvas does not.
-      if (webgl.has('blank')) return undefined;
-      const source = args[5];
-      if ((webgl.has('stale') || webgl.has('throwing') || webgl.has('locks')) && !seen.has(source)) {
-        const first = document.createElement('canvas');
-        first.width = source.width;
-        first.height = source.height;
-        first.getContext('2d').drawImage(source, 0, 0);
-        seen.set(source, first);
-        if (webgl.has('locks')) {
-          const c = source.getContext('2d');
-          ['fillRect', 'clearRect', 'drawImage', 'putImageData', 'fill', 'stroke', 'fillText', 'strokeText'].forEach((m) => { c[m] = () => {}; });
-        }
-      } else if (webgl.has('throwing')) throw new Error('texImage2D: canvas cannot be uploaded again');
-      if (webgl.has('stale')) args[5] = seen.get(source);
-      if (webgl.has('flipped')) this.pixelStorei(this.UNPACK_FLIP_Y_WEBGL, true);
-      realUpload.apply(this, args);
-      if (webgl.has('flipped')) this.pixelStorei(this.UNPACK_FLIP_Y_WEBGL, false);
-      return undefined;
-    };
-  }
-  const handlers = { start: [], move: [], end: [], cancel: [], show: [], hide: [] };
+  // audio=late: autoplay and any play() before the file has loaded are ignored. audio=broken: no file will load.
+  const audioMode = params.get('audio');
+  const handlers = { start: [], move: [], end: [], cancel: [], show: [], hide: [], interruptBegin: [], interruptEnd: [] };
   let first = true;
   let privacyHandler = null;
 
@@ -99,6 +70,16 @@
     auth: { 'scope.werun': params.get('werun') === 'denied' ? false : undefined },
     privacyAgreed: params.get('privacy') !== 'ask',
     calls: [],
+    audio: [],
+    interrupted: false,
+    playsIgnored: 0,
+    fire(name) { handlers[name].forEach((h) => h({})); },
+    // As the docs describe a call or an alarm: every sound stops, and play() does nothing until it is over.
+    interrupt(on) {
+      state.interrupted = on;
+      if (on) state.audio.forEach((a) => a.pause());
+      state.fire(on ? 'interruptBegin' : 'interruptEnd');
+    },
   };
 
   function cb(o, res, fail) {
@@ -147,18 +128,32 @@
     getUpdateManager: () => ({ onUpdateReady() {}, onCheckForUpdate() {}, onUpdateFailed() {}, applyUpdate() {} }),
     createInnerAudioContext() {
       const a = new Audio();
+      a.preload = 'auto';
+      state.audio.push(a);
+      const on = (type) => (h) => a.addEventListener(type, () => h({}));
       const ctx = {
-        get src() { return a.src; }, set src(v) { a.src = v; },
+        get src() { return a.src; }, set src(v) { a.src = audioMode === 'broken' ? 'data:audio/mpeg;base64,AAAA' : v; },
+        get autoplay() { return a.autoplay; }, set autoplay(v) { a.autoplay = !!v && audioMode !== 'late' && !state.interrupted; },
         get loop() { return a.loop; }, set loop(v) { a.loop = v; },
         get volume() { return a.volume; }, set volume(v) { a.volume = v; },
         get paused() { return a.paused; },
-        play() { const p = a.play(); if (p && p.catch) p.catch(() => audioUnlock.push(() => a.play().catch(() => {}))); },
+        get currentTime() { return a.currentTime; },
+        play() {
+          if (state.interrupted || (audioMode === 'late' && a.readyState < 3)) { state.playsIgnored++; return; }
+          const p = a.play();
+          if (p && p.catch) p.catch(() => audioUnlock.push(() => a.play().catch(() => {})));
+        },
         pause() { a.pause(); }, stop() { a.pause(); try { a.currentTime = 0; } catch (e) { /* not loaded */ } },
         seek(t) { try { a.currentTime = t; } catch (e) { /* not loaded */ } },
-        destroy() { a.pause(); }, onError() {},
+        destroy() { a.pause(); },
+        onCanplay: on('canplay'), onPlay: on('playing'), onPause: on('pause'), onEnded: on('ended'), onStop() {}, onTimeUpdate: on('timeupdate'),
+        onError(h) { a.addEventListener('error', () => h({ errCode: a.error ? a.error.code : -1, errMsg: 'stand-in' })); },
       };
       return ctx;
     },
+    setInnerAudioOption(o) { state.audioOption = o; },
+    onAudioInterruptionBegin: (h) => handlers.interruptBegin.push(h),
+    onAudioInterruptionEnd: (h) => handlers.interruptEnd.push(h),
     // Authorisation flow
     onNeedPrivacyAuthorization(h) { privacyHandler = h; },
     requirePrivacyAuthorize(o) {
