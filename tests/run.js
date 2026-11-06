@@ -2292,11 +2292,14 @@ test('resizing a sprite takes whole source pixels, so it can never invent a colo
 const Present = require('../js/core/present.js');
 
 function fakeScreen({ compiles = true } = {}) {
-  const log = { asked: [], drawn: 0, uploaded: [], images: 0 };
+  const log = { asked: [], drawn: 0, uploaded: [], images: 0, reads: 0 };
   const flat = () => ({
     fillRect() {},
     drawImage() { log.images++; },
-    getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+    getImageData: (x, y, w, h) => {
+      log.reads++;
+      return { data: new Uint8ClampedArray(w * h * 4) };
+    },
   });
   const known = {
     drawingBufferWidth: 6,
@@ -2329,7 +2332,7 @@ test('WebGL is only ever asked of the on-screen canvas, never a spare one', () =
   assert.ok(!s.log.asked.includes('webgl'), s.log.asked.join());
 });
 
-test('a phone whose picture cannot be read back keeps WebGL, uses the cheap route and says so', () => {
+test('a phone whose picture cannot be read back keeps WebGL, still copies pixels and says so', () => {
   const s = fakeScreen();
   const r = Present.create(s.main, s.back, s.make, s.fit);
   assert.strictEqual(r.mode, 'webgl');
@@ -2337,7 +2340,17 @@ test('a phone whose picture cannot be read back keeps WebGL, uses the cheap rout
   const before = s.log.drawn;
   r.draw();
   assert.strictEqual(s.log.drawn, before + 1);
-  assert.strictEqual(s.log.uploaded[s.log.uploaded.length - 1], s.back);
+  assert.ok(s.log.uploaded[s.log.uploaded.length - 1] instanceof Uint8Array);
+});
+
+test('every frame reads the buffer afresh, and the buffer itself is never handed to WebGL', () => {
+  const s = fakeScreen();
+  const r = Present.create(s.main, s.back, s.make, s.fit);
+  const reads = s.log.reads, uploads = s.log.uploaded.length;
+  for (let i = 0; i < 3; i++) r.draw();
+  assert.strictEqual(s.log.reads, reads + 3);
+  assert.strictEqual(s.log.uploaded.length, uploads + 3);
+  assert.ok(!s.log.uploaded.includes(s.back));
 });
 
 test('a shader that will not build falls to 2D where the runtime still allows it', () => {

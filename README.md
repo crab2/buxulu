@@ -216,19 +216,21 @@ The game draws to a low-resolution buffer, around 293×633, and enlarges it by a
 
 Three things now keep the picture square whatever the runtime does:
 
-- **WebGL shows the frame.** The buffer is uploaded as a texture with `NEAREST` filtering, which the GPU follows on every device. Before the first frame, the on-screen canvas draws a small known pattern and reads it back, exact to the pixel. If that fails, the game copies the frame's pixels into the texture instead of handing over the canvas, which is slower but doesn't depend on the runtime's canvas upload. Only a phone that offers no WebGL at all uses 2D.
+- **WebGL shows the frame.** The buffer's pixels are copied into a texture every frame, and the texture uses `NEAREST` filtering, which the GPU follows on every device. Before the first frame, the on-screen canvas draws a small known pattern twice, in a different order each time, and reads it back, exact to the pixel. If copying fails that test, the game hands the canvas to WebGL instead. Only a phone that offers no WebGL at all uses 2D.
 - **Nothing kept on screen is enlarged at draw time.** Damage digits, big text and doubled icons are baked at their final size. Only sizes that change every frame, such as a card turning over, are still scaled by the runtime.
 - **The canvas matches the panel.** Android reports whole CSS pixels with a fractional ratio, so a 1080-wide panel at 2.75 comes back as 393, which multiplies to 1080.75. A canvas one pixel too wide gets resampled by the phone's compositor, so the width now snaps to the panel's real size (`js/core/sizing.js`).
 
 **Why the self-test uses the real canvas.** The first version tested on a spare canvas, so a failure could still fall back to 2D. But [weapp-adapter's notes](https://www.github.com/finscn/weapp-adapter) say off-screen canvases effectively don't support WebGL. That note is old and unconfirmed. If it still holds, the spare-canvas test would have failed on phones and left the blur in place, while every test here passed. The trade-off is that a canvas keeps the first kind of context it is given, so there is no 2D to return to once WebGL is taken. A phone that offers WebGL and then can't draw with it would show a black screen. WebGL game engines on WeChat draw on this same canvas, so that should be rare, but only a real phone can confirm it.
 
-**To check a phone:** the bottom of the settings screen says what it ended up with, for example `webgl x4 293x633` and `1170x2532 pr3 nearest`.
+**Why the frame's canvas isn't handed to WebGL.** A build that preferred handing it over stayed on the first frame on a real phone, sharp, while the music and tap sounds carried on, which points to the game still running behind the picture. A self-test that uploads a fresh canvas once can't see this kind of failure, because the game uploads the same canvas every frame. Exactly what the phone does wrong hasn't been confirmed. On the stand-in, three different behaviours produce this same freeze and all pass a one-upload test: an upload that repeats the first frame, one that throws from the second time, and one that stops the canvas accepting more drawing. Copying the pixels avoids all three, because the game never passes its canvas to the upload. The cost is a read of about 724 KB per frame, and a test in headless Chromium put it at 2.8 ms a frame against 2.3 ms, which says little about a phone.
+
+**To check a phone:** the bottom of the settings screen says what it ended up with, for example `webgl x4 293x633` and `1170x2532 pr3 nearest`. A frozen picture can't reach that screen, so a build that isn't released also shows a native toast about 4 seconds in, for example `webgl f120 e0`. That is how the frame is shown, the frames run so far and the number of different errors they hit. A high frame count under a stuck picture means the game is running and the problem is in getting the frame to the screen. A count near 1 means the frame loop stopped.
 
 | Part | Meaning |
 |---|---|
-| `webgl` | The sharp path, and the self-test passed |
-| `webgl:pixels` | The sharp path by the slower route, because uploading the canvas directly failed the self-test |
-| `webgl:unverified` | WebGL is in use but neither route passed. If the picture looks right, only the read-back failed |
+| `webgl` | The sharp path, copying pixels, and the self-test passed |
+| `webgl:canvas` | The sharp path by handing over the canvas, because copying failed the self-test and this route passed it |
+| `webgl:unverified` | WebGL is in use and copying pixels, but neither route passed. If the picture looks right and keeps moving, only the read-back failed |
 | `2d:no-webgl` or `2d:setup-failed` | The old path, which may blur, and why it was used |
 | `x4 293x633` | The whole-number scale and the buffer size |
 | `1170x2532 pr3` | The canvas size and the ratio WeChat reported |
@@ -326,7 +328,8 @@ The end-to-end suite needs a Chromium build. It finds one in the Playwright cach
 Everything above ran against a browser stand-in for the WeChat runtime (`tools/wx-shim.js`) and a fake cloud backend. These still need a real run:
 
 - The game on a real WeChat client, on iOS and Android, including time away with the game truly closed.
-- **The sharpness fix on a real phone.** The blur was reproduced on a stand-in that ignores the smoothing flag, and no source could confirm that this is what WeChat's runtime does. The fix doesn't depend on it, and the settings screen reports what the phone actually did. Still to measure there: whether the settings screen says plain `webgl`, the cost of uploading the frame to WebGL every frame, and whether the share card looks right.
+- **The sharpness fix on a real phone.** The blur was reproduced on a stand-in that ignores the smoothing flag, and no source could confirm that this is what WeChat's runtime does. The fix doesn't depend on it, and the settings screen reports what the phone actually did. Still to measure there: whether the settings screen says plain `webgl`, the frame rate with pixels copied every frame, and whether the share card looks right.
+- **The frozen-picture fix on a real phone.** The freeze was seen on a phone and reproduced only on a stand-in, so what the phone actually does wrong is still unconfirmed, and the fix needs a real run to prove itself. If the picture still sticks while the toast shows `webgl` and a high frame count, the canvas upload wasn't the cause.
 - The real WeRun, privacy and cloud calls. The API shapes follow the official docs, but no live call has been made.
 - `putImageData`, `multiply` blending, `wx.setPreferredFramesPerSecond`, `wx.setKeepScreenOn` and `wx.onMemoryWarning` on real devices. Each has a feature check or fallback, so a gap should mean a plainer or slower result rather than a crash.
 - Audio. The files decode and aren't silent or clipped, but nobody has listened to them yet.

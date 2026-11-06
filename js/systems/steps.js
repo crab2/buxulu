@@ -207,4 +207,4 @@ function view() {
   return state.view || store.get().steps.lastView;
 }
 
-module.exports = { S, state, init, onPrivacyNeeded, refresh, exchange, openSettings, openPrivacy, view, mockAddSteps, RULES: ledger };
+module.exports = { S, state, isRelease, init, onPrivacyNeeded, refresh, exchange, openSettings, openPrivacy, view, mockAddSteps, RULES: ledger };

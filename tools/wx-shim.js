@@ -14,28 +14,47 @@
   const base = measured.width > 50 && measured.height > 50 ? { width: measured.width, height: measured.height } : { width: 390, height: 844 };
   const params = new URLSearchParams(location.search);
   // Behaviour a real phone may have and desktop Chromium does not, so tests can see what the game does there.
-  // smoothing=ignored: the 2D canvas filters however it is asked. webgl=none: no WebGL at all.
-  // webgl=onscreen: WebGL exists only on the on-screen canvas, as has been reported of WeChat.
-  // webgl=blank, webgl=flipped: uploading a canvas does nothing, or comes out upside down. Raw pixels still work.
-  const webglFlag = params.get('webgl');
+  // smoothing=ignored: the 2D canvas filters however it is asked.
+  // webgl takes a comma-separated list:
+  //   none: no WebGL at all. onscreen: WebGL exists only on the on-screen canvas, as has been reported of WeChat.
+  //   blank, flipped: uploading a canvas does nothing, or comes out upside down.
+  //   stale: every upload of a canvas repeats its first upload, so the first frame stays on screen forever.
+  //   throwing: a canvas uploads once, and every later upload of it throws.
+  //   locks: uploading a canvas freezes it, so later 2D drawing on it has no effect.
+  //   nopixels: uploading raw pixels does nothing.
+  const webgl = new Set((params.get('webgl') || '').split(','));
   if (params.get('smoothing') === 'ignored') {
     Object.defineProperty(CanvasRenderingContext2D.prototype, 'imageSmoothingEnabled', { get: () => true, set() {} });
   }
-  if (webglFlag === 'none' || webglFlag === 'onscreen') {
+  if (webgl.has('none') || webgl.has('onscreen')) {
     const realContext = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function (type, o) {
-      const refused = type === 'webgl' && (webglFlag === 'none' || this.id !== 'game');
+      const refused = type === 'webgl' && (webgl.has('none') || this.id !== 'game');
       return refused ? null : realContext.call(this, type, o);
     };
   }
-  if (webglFlag === 'blank' || webglFlag === 'flipped') {
+  if (['blank', 'flipped', 'stale', 'throwing', 'locks', 'nopixels'].some((f) => webgl.has(f))) {
     const realUpload = WebGLRenderingContext.prototype.texImage2D;
+    const seen = new WeakMap(); // Each canvas's copy of its first upload.
     WebGLRenderingContext.prototype.texImage2D = function (...args) {
-      if (args.length === 9) return realUpload.apply(this, args); // Raw pixels carry their size; a canvas does not.
-      if (webglFlag === 'blank') return undefined;
-      this.pixelStorei(this.UNPACK_FLIP_Y_WEBGL, true);
+      if (args.length === 9) return webgl.has('nopixels') ? undefined : realUpload.apply(this, args); // Raw pixels carry their size; a canvas does not.
+      if (webgl.has('blank')) return undefined;
+      const source = args[5];
+      if ((webgl.has('stale') || webgl.has('throwing') || webgl.has('locks')) && !seen.has(source)) {
+        const first = document.createElement('canvas');
+        first.width = source.width;
+        first.height = source.height;
+        first.getContext('2d').drawImage(source, 0, 0);
+        seen.set(source, first);
+        if (webgl.has('locks')) {
+          const c = source.getContext('2d');
+          ['fillRect', 'clearRect', 'drawImage', 'putImageData', 'fill', 'stroke', 'fillText', 'strokeText'].forEach((m) => { c[m] = () => {}; });
+        }
+      } else if (webgl.has('throwing')) throw new Error('texImage2D: canvas cannot be uploaded again');
+      if (webgl.has('stale')) args[5] = seen.get(source);
+      if (webgl.has('flipped')) this.pixelStorei(this.UNPACK_FLIP_Y_WEBGL, true);
       realUpload.apply(this, args);
-      this.pixelStorei(this.UNPACK_FLIP_Y_WEBGL, false);
+      if (webgl.has('flipped')) this.pixelStorei(this.UNPACK_FLIP_Y_WEBGL, false);
       return undefined;
     };
   }
@@ -105,7 +124,7 @@
       const notch = Number(params.get('notch') || 44);
       return { left: r.width - 97, right: r.width - 10, top: notch + 4, bottom: notch + 36, width: 87, height: 32 };
     },
-    getAccountInfoSync: () => ({ miniProgram: { envVersion: 'develop', appId: 'preview' } }),
+    getAccountInfoSync: () => ({ miniProgram: { envVersion: params.get('env') || 'develop', appId: 'preview' } }),
     onTouchStart: (h) => handlers.start.push(h),
     onTouchMove: (h) => handlers.move.push(h),
     onTouchEnd: (h) => handlers.end.push(h),
@@ -118,6 +137,7 @@
     setStorageSync(k, v) { try { localStorage.setItem('wx:' + k, JSON.stringify(v)); } catch (e) { /* private mode */ } },
     removeStorageSync(k) { try { localStorage.removeItem('wx:' + k); } catch (e) { /* private mode */ } },
     vibrateShort() {},
+    showToast(o) { state.toast = o.title; },
     setPreferredFramesPerSecond(n) { state.fps = n; },
     setKeepScreenOn(o) { state.keepOn = o.keepScreenOn; },
     onMemoryWarning(h) { state.memoryWarning = h; },

@@ -1528,8 +1528,13 @@ async function assertOnScreen(d, where) {
   const readScreen = (d) => d.page.evaluate(() => new Promise((ok) => {
     const D = window.__BUXU__.display, real = D.present;
     D.present = function () {
-      real();
       D.present = real;
+      let thrown = null;
+      try {
+        real();
+      } catch (e) {
+        thrown = e; // Goes back to the game's own handler below. Until then, the screen still gets checked.
+      }
       const cv = document.getElementById('game');
       const pw = cv.width, ph = cv.height;
       let px, bottomUp = false;
@@ -1540,7 +1545,7 @@ async function assertOnScreen(d, where) {
         bottomUp = true;
       } else px = cv.getContext('2d').getImageData(0, 0, pw, ph).data;
       const back = D.ctx.getImageData(0, 0, D.W, D.H).data;
-      let wrong = 0, lit = 0;
+      let wrong = 0, lit = 0, picture = 0;
       for (let y = 0; y < ph; y++) {
         const row = bottomUp ? ph - 1 - y : y;
         for (let x = 0; x < pw; x++) {
@@ -1548,9 +1553,11 @@ async function assertOnScreen(d, where) {
           const b = (Math.floor(y / D.scale) * D.W + Math.floor(x / D.scale)) * 4;
           if (Math.abs(px[a] - back[b]) > 2 || Math.abs(px[a + 1] - back[b + 1]) > 2 || Math.abs(px[a + 2] - back[b + 2]) > 2) wrong++;
           if (px[a] + px[a + 1] + px[a + 2] > 30) lit++;
+          picture = (Math.imul(picture, 31) + px[a] + px[a + 1] * 3 + px[a + 2] * 7) | 0;
         }
       }
-      ok({ mode: D.info.mode, why: D.info.why, smoothing: D.info.smoothing, wrong: wrong / (pw * ph), lit: lit / (pw * ph), pw, ph, scale: D.scale });
+      ok({ mode: D.info.mode, why: D.info.why, smoothing: D.info.smoothing, wrong: wrong / (pw * ph), lit: lit / (pw * ph), picture, pw, ph, scale: D.scale });
+      if (thrown) throw thrown;
     };
   }));
 
@@ -1607,23 +1614,71 @@ async function assertOnScreen(d, where) {
     await d.ctx.close();
   });
 
-  for (const [label, query] of [['does nothing', '?webgl=blank'], ['comes out upside down', '?webgl=flipped']]) {
-    await check(`sharp picture: a canvas upload that ${label} switches to copying pixels`, async () => {
-      const d = await open(browser, { speed: 3, query });
+  // Each of these passed a self-test that uploaded only once, and the last three left the first frame on screen
+  // for good with the game still running behind it. Matching the buffer isn't enough on its own, because a buffer
+  // that froze matches a screen that froze, so the picture also has to change between two screens.
+  for (const [label, flag] of [
+    ['does nothing', 'blank'],
+    ['comes out upside down', 'flipped'],
+    ['repeats its first frame forever', 'stale'],
+    ['throws after the first time', 'throwing'],
+    ['stops the canvas being drawn on', 'locks'],
+  ]) {
+    await check(`live picture: a canvas upload that ${label} cannot stop the screen updating`, async () => {
+      const d = await open(browser, { speed: 3, query: `?webgl=${flag}` });
       await prepare(d, OPEN_ALL);
       await go(d, 'party');
       await d.waitScene('Party');
-      const r = await readScreen(d);
-      assert.strictEqual(r.mode, 'webgl');
-      assert.strictEqual(r.why, 'pixels');
-      assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
-      assert.ok(r.lit > 0.3, 'something is on the screen');
-      await d.tap('nav-road');
-      await d.waitScene('Road');
+      const seen = [];
+      for (const where of ['party', 'road']) {
+        if (where === 'road') {
+          await d.tap('nav-road');
+          await d.waitScene('Road');
+        }
+        const r = await readScreen(d);
+        assert.strictEqual(r.mode, 'webgl');
+        assert.strictEqual(r.why, '');
+        assert.strictEqual(r.wrong, 0, `${where}: ${(r.wrong * 100).toFixed(2)}% of pixels differ`);
+        assert.ok(r.lit > 0.3, 'something is on the screen');
+        seen.push(r.picture);
+      }
+      assert.notStrictEqual(seen[0], seen[1], 'the picture changed between the two screens');
       await d.assertClean();
       await d.ctx.close();
     });
   }
+
+  await check('live picture: a phone where copying pixels fails hands over the canvas and says so', async () => {
+    const d = await open(browser, { speed: 3, query: '?webgl=nopixels' });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'party');
+    await d.waitScene('Party');
+    const r = await readScreen(d);
+    assert.strictEqual(r.mode, 'webgl');
+    assert.strictEqual(r.why, 'canvas');
+    assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('live picture: the self-test does not trust a canvas upload that only works the first time', async () => {
+    const d = await open(browser, { speed: 3, query: '?webgl=nopixels,stale' });
+    assert.strictEqual((await readScreen(d)).why, 'unverified');
+    await d.ctx.close();
+  });
+
+  await check('live picture: a build that is not released reports once how the frame loop is doing', async () => {
+    const d = await open(browser);
+    await d.page.waitForFunction(() => window.__wxMock.toast, null, { timeout: 8000 });
+    const message = await d.page.evaluate(() => window.__wxMock.toast);
+    const m = /^webgl f(\d+) e0$/.exec(message);
+    assert.ok(m && Number(m[1]) > 1, `unexpected report: ${message}`);
+    await d.ctx.close();
+    const released = await open(browser, { query: '?env=release' });
+    await released.page.waitForTimeout(4500);
+    assert.strictEqual(await released.page.evaluate(() => window.__wxMock.toast), undefined, 'a released build stays quiet');
+    await released.ctx.close();
+  });
 
   await check('sharp picture: no WebGL at all falls back to 2D rather than a black screen', async () => {
     const d = await open(browser, { speed: 3, query: '?webgl=none' });
