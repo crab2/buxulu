@@ -314,7 +314,10 @@ async function assertOnScreen(d, where) {
     await assertTidy(d, 'boost sheet');
     await d.tap('modal-0');
     await d.waitScene('Modal');
-    assert.ok((await d.state()).idle.hasteSecs >= 1800, 'buying from the road works too, and the sheet stays open');
+    // Haste counts down from the moment it is bought, so a read just after the once-a-second tick is a little under 1800.
+    const bought = await d.state();
+    assert.ok(bought.stardust < 2000, 'buying from the road works too, and the sheet stays open');
+    assert.ok(bought.idle.hasteSecs > 1790 && bought.idle.hasteSecs <= 1800, `haste after buying: ${bought.idle.hasteSecs}`);
     await d.tap('modal-3');
     await go(d, 'station');
     await d.waitScene('Station');
@@ -1590,16 +1593,30 @@ async function assertOnScreen(d, where) {
     await d.ctx.close();
   });
 
-  for (const [label, query, why] of [['no WebGL at all', '?webgl=none', 'no-webgl'], ['WebGL that cannot show a canvas', '?webgl=broken', 'bad-pixels']]) {
-    await check(`sharp picture: ${label} falls back to 2D rather than a black screen`, async () => {
+  await check('sharp picture: a phone with WebGL only on the on-screen canvas still gets square pixels', async () => {
+    const d = await open(browser, { speed: 3, query: '?smoothing=ignored&webgl=onscreen' });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'road');
+    await d.page.waitForTimeout(300);
+    const r = await readScreen(d);
+    assert.strictEqual(r.mode, 'webgl', `fell back to 2D: ${r.why}`);
+    assert.strictEqual(r.why, '');
+    assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
+    assert.ok(r.lit > 0.3, 'something is on the screen');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  for (const [label, query] of [['does nothing', '?webgl=blank'], ['comes out upside down', '?webgl=flipped']]) {
+    await check(`sharp picture: a canvas upload that ${label} switches to copying pixels`, async () => {
       const d = await open(browser, { speed: 3, query });
       await prepare(d, OPEN_ALL);
       await go(d, 'party');
       await d.waitScene('Party');
       const r = await readScreen(d);
-      assert.strictEqual(r.mode, '2d');
-      assert.strictEqual(r.why, why);
-      assert.strictEqual(r.wrong, 0, 'where the flag works, 2D is exact too');
+      assert.strictEqual(r.mode, 'webgl');
+      assert.strictEqual(r.why, 'pixels');
+      assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
       assert.ok(r.lit > 0.3, 'something is on the screen');
       await d.tap('nav-road');
       await d.waitScene('Road');
@@ -1607,6 +1624,22 @@ async function assertOnScreen(d, where) {
       await d.ctx.close();
     });
   }
+
+  await check('sharp picture: no WebGL at all falls back to 2D rather than a black screen', async () => {
+    const d = await open(browser, { speed: 3, query: '?webgl=none' });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'party');
+    await d.waitScene('Party');
+    const r = await readScreen(d);
+    assert.strictEqual(r.mode, '2d');
+    assert.strictEqual(r.why, 'no-webgl');
+    assert.strictEqual(r.wrong, 0, 'where the flag works, 2D is exact too');
+    assert.ok(r.lit > 0.3, 'something is on the screen');
+    await d.tap('nav-road');
+    await d.waitScene('Road');
+    await d.assertClean();
+    await d.ctx.close();
+  });
 
   await check('sharp picture: enlarged numbers, text and icons stay crisp whatever the runtime filters', async () => {
     const d = await open(browser, { speed: 3, query: '?smoothing=ignored' });

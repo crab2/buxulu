@@ -2286,6 +2286,70 @@ test('resizing a sprite takes whole source pixels, so it can never invent a colo
   assert.strictEqual(new Grid(3, 3).resized(6, 6).get(2, 2), -1, 'transparency stays transparent');
 });
 
+// ---- Showing the frame ----
+// The browser suite runs the routes that pass the self-test on real WebGL. These are the ones a browser
+// cannot reach: a phone whose read-back fails, and a runtime that still offers 2D after WebGL.
+const Present = require('../js/core/present.js');
+
+function fakeScreen({ compiles = true } = {}) {
+  const log = { asked: [], drawn: 0, uploaded: [], images: 0 };
+  const flat = () => ({
+    fillRect() {},
+    drawImage() { log.images++; },
+    getImageData: (x, y, w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }),
+  });
+  const known = {
+    drawingBufferWidth: 6,
+    drawingBufferHeight: 4,
+    NO_ERROR: 0,
+    getError: () => 0,
+    isContextLost: () => false,
+    getShaderParameter: () => compiles,
+    getProgramParameter: () => true,
+    drawArrays() { log.drawn++; },
+    texImage2D(...args) { log.uploaded.push(args[args.length - 1]); },
+  };
+  // Everything else a phone's WebGL accepts without comment. readPixels leaves its buffer empty.
+  const gl = new Proxy(known, { get: (t, k) => (k in t ? t[k] : () => ({})) });
+  const make = () => ({
+    width: 0,
+    height: 0,
+    getContext(type) {
+      log.asked.push(type);
+      return type === '2d' ? flat() : null;
+    },
+  });
+  return { log, make, back: make(), main: { getContext: (type) => (type === 'webgl' ? gl : flat()) }, fit: { physW: 6, physH: 4, W: 3, H: 2, scale: 2 } };
+}
+
+test('WebGL is only ever asked of the on-screen canvas, never a spare one', () => {
+  const s = fakeScreen();
+  Present.create(s.main, s.back, s.make, s.fit);
+  assert.ok(s.log.asked.length > 0, 'spare canvases were used for 2D work');
+  assert.ok(!s.log.asked.includes('webgl'), s.log.asked.join());
+});
+
+test('a phone whose picture cannot be read back keeps WebGL, uses the cheap route and says so', () => {
+  const s = fakeScreen();
+  const r = Present.create(s.main, s.back, s.make, s.fit);
+  assert.strictEqual(r.mode, 'webgl');
+  assert.strictEqual(r.why, 'unverified');
+  const before = s.log.drawn;
+  r.draw();
+  assert.strictEqual(s.log.drawn, before + 1);
+  assert.strictEqual(s.log.uploaded[s.log.uploaded.length - 1], s.back);
+});
+
+test('a shader that will not build falls to 2D where the runtime still allows it', () => {
+  const s = fakeScreen({ compiles: false });
+  const r = Present.create(s.main, s.back, s.make, s.fit);
+  assert.strictEqual(r.mode, '2d');
+  assert.strictEqual(r.why, 'setup-failed');
+  const before = s.log.images;
+  r.draw();
+  assert.strictEqual(s.log.images, before + 1);
+});
+
 // ---- Skill levels ----
 const Skills = require('../js/systems/skills.js');
 

@@ -37,7 +37,7 @@ npm run preview        # writes dist/preview/index.html, a single self-contained
 
 On the 步虚 tab, the red development panel has **+2000 步** and **时间快进 1 小时** buttons. They never appear in a release build.
 
-**In WeChat DevTools:** import this folder as a Mini Game project. The default `appid` is a tourist id, and steps are simulated until you deploy the cloud functions.
+**In WeChat DevTools:** import this folder as a Mini Game project. `project.config.json` holds this game's AppID, so if you don't have access to it, switch to a tourist id in DevTools. Steps are simulated until you deploy the cloud functions.
 
 ## How steps work: an enhancement, never a requirement
 
@@ -216,15 +216,20 @@ The game draws to a low-resolution buffer, around 293×633, and enlarges it by a
 
 Three things now keep the picture square whatever the runtime does:
 
-- **WebGL shows the frame.** The buffer is uploaded as a texture with `NEAREST` filtering, which the GPU follows on every device. A canvas keeps the first kind of context it is given, so a throwaway canvas proves the whole path on this device first, down to the exact pixels, and anything short of that falls back to 2D rather than risk a black screen.
+- **WebGL shows the frame.** The buffer is uploaded as a texture with `NEAREST` filtering, which the GPU follows on every device. Before the first frame, the on-screen canvas draws a small known pattern and reads it back, exact to the pixel. If that fails, the game copies the frame's pixels into the texture instead of handing over the canvas, which is slower but doesn't depend on the runtime's canvas upload. Only a phone that offers no WebGL at all uses 2D.
 - **Nothing kept on screen is enlarged at draw time.** Damage digits, big text and doubled icons are baked at their final size. Only sizes that change every frame, such as a card turning over, are still scaled by the runtime.
 - **The canvas matches the panel.** Android reports whole CSS pixels with a fractional ratio, so a 1080-wide panel at 2.75 comes back as 393, which multiplies to 1080.75. A canvas one pixel too wide gets resampled by the phone's compositor, so the width now snaps to the panel's real size (`js/core/sizing.js`).
+
+**Why the self-test uses the real canvas.** The first version tested on a spare canvas, so a failure could still fall back to 2D. But [weapp-adapter's notes](https://www.github.com/finscn/weapp-adapter) say off-screen canvases effectively don't support WebGL. That note is old and unconfirmed. If it still holds, the spare-canvas test would have failed on phones and left the blur in place, while every test here passed. The trade-off is that a canvas keeps the first kind of context it is given, so there is no 2D to return to once WebGL is taken. A phone that offers WebGL and then can't draw with it would show a black screen. WebGL game engines on WeChat draw on this same canvas, so that should be rare, but only a real phone can confirm it.
 
 **To check a phone:** the bottom of the settings screen says what it ended up with, for example `webgl x4 293x633` and `1170x2532 pr3 nearest`.
 
 | Part | Meaning |
 |---|---|
-| `webgl` or `2d:reason` | How the frame reaches the screen. `2d` means the self-test failed, and the reason says why |
+| `webgl` | The sharp path, and the self-test passed |
+| `webgl:pixels` | The sharp path by the slower route, because uploading the canvas directly failed the self-test |
+| `webgl:unverified` | WebGL is in use but neither route passed. If the picture looks right, only the read-back failed |
+| `2d:no-webgl` or `2d:setup-failed` | The old path, which may blur, and why it was used |
 | `x4 293x633` | The whole-number scale and the buffer size |
 | `1170x2532 pr3` | The canvas size and the ratio WeChat reported |
 | `nearest` or `smooth` | Whether this phone's 2D canvas obeys the smoothing flag. `smooth` with `webgl` means the fix is what is keeping it sharp |
@@ -266,7 +271,7 @@ The e2e suite fails if a screen goes over budget, or if text collides with a but
 Only you can do these steps, because they need your WeChat account.
 
 1. **Register a Mini Game with an enterprise account.** WeChat's [category rules](https://developers.weixin.qq.com/minigame/introduction/guide/type.html) say personal accounts cannot select the 角色类 (role-playing) category, and a role-playing idle game belongs there. Submitting it under a different category risks rejection, because the same page says a category that doesn't match the content is rejected at review.
-2. Put your AppID in `project.config.json`.
+2. Put your AppID in `project.config.json`. This is already done for this game.
 3. In DevTools, open **云开发**, create an environment and copy its id into `CLOUD_ENV` in `js/config.js`.
 4. Right-click `cloudfunctions/stepExchange` and choose **上传并部署:云端安装依赖**. Do the same for `cloudfunctions/cloudSave`.
 5. In the cloud database, create the collections `step_ledger` and `saves`, and set both to **仅管理端可读写**. Only the cloud functions should be able to touch them.
@@ -321,7 +326,7 @@ The end-to-end suite needs a Chromium build. It finds one in the Playwright cach
 Everything above ran against a browser stand-in for the WeChat runtime (`tools/wx-shim.js`) and a fake cloud backend. These still need a real run:
 
 - The game on a real WeChat client, on iOS and Android, including time away with the game truly closed.
-- **The sharpness fix on a real phone.** The blur was reproduced on a stand-in that ignores the smoothing flag, and no source could confirm that this is what WeChat's runtime does. The fix doesn't depend on it, and the settings screen reports what the phone actually did. Still to measure there: the cost of uploading the frame to WebGL every frame, and whether the share card looks right.
+- **The sharpness fix on a real phone.** The blur was reproduced on a stand-in that ignores the smoothing flag, and no source could confirm that this is what WeChat's runtime does. The fix doesn't depend on it, and the settings screen reports what the phone actually did. Still to measure there: whether the settings screen says plain `webgl`, the cost of uploading the frame to WebGL every frame, and whether the share card looks right.
 - The real WeRun, privacy and cloud calls. The API shapes follow the official docs, but no live call has been made.
 - `putImageData`, `multiply` blending, `wx.setPreferredFramesPerSecond`, `wx.setKeepScreenOn` and `wx.onMemoryWarning` on real devices. Each has a feature check or fallback, so a gap should mean a plainer or slower result rather than a crash.
 - Audio. The files decode and aren't silent or clipped, but nobody has listened to them yet.

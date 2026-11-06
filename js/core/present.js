@@ -3,20 +3,33 @@
 // A 2D canvas can only ask for this: imageSmoothingEnabled = false is a request, and a runtime is free to
 // filter anyway. Desktop Chromium honours it, which is why the game looks sharp in WeChat DevTools. A
 // WebGL texture with NEAREST filtering is a rule the GPU follows on every device, so it is the first
-// choice. It cannot be tested on the on-screen canvas, because a canvas keeps the first kind of context it
-// is given and a failed attempt could leave a black screen. So a throwaway canvas proves the whole path
-// on this device first, down to the exact pixels, and anything short of that falls back to 2D.
+// choice.
+//
+// The self-test runs on the on-screen canvas itself. A rehearsal on a spare canvas looks safer, but WebGL on
+// WeChat's off-screen canvases is reported to be next to useless, so it could turn this off on a phone where
+// it would have worked. The cost is that a canvas keeps the first kind of context it is given, so there is
+// no 2D to go back to once WebGL is taken. A failed self-test tries a second way of uploading instead.
 
 const OPTIONS = { alpha: false, antialias: false, depth: false, stencil: false, premultipliedAlpha: false, preserveDrawingBuffer: false };
 
 const VERT = 'attribute vec2 p;attribute vec2 t;varying highp vec2 v;void main(){v=t;gl_Position=vec4(p,0.,1.);}';
-// A tall phone needs high precision: mediump can land a coordinate on the neighbouring texel.
+// A tall phone needs high precision: mediump can land a coordinate on the neighbouring texel. The fragment
+// side leaves it to the default below, because a shader that insists on highp fails to compile without it.
 const FRAG = '#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n'
-  + 'uniform sampler2D s;varying highp vec2 v;void main(){gl_FragColor=texture2D(s,v);}';
+  + 'uniform sampler2D s;varying vec2 v;void main(){gl_FragColor=texture2D(s,v);}';
+
+// Two ways to get a frame into the texture. Handing over the canvas is cheap, and is what WebGL engines do
+// for their text. Copying its pixels out is slower, but the rows are in a defined order, so it still works
+// where the direct route comes out blank or upside down.
+const fromCanvas = (gl, source) => gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+const fromPixels = (gl, source) => {
+  const { data } = source.getContext('2d').getImageData(0, 0, source.width, source.height);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, source.width, source.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+};
 
 // Sets up one textured quad and returns the function that shows a canvas on it. u1 and v1 say how much of
 // the frame is used: the buffer can be slightly wider than the screen, and cropping keeps each block whole.
-function build(gl, width, height, u1, v1) {
+function build(gl, width, height, u1, v1, upload) {
   const shader = (type, src) => {
     const sh = gl.createShader(type);
     gl.shaderSource(sh, src);
@@ -53,7 +66,7 @@ function build(gl, width, height, u1, v1) {
   gl.viewport(0, 0, width, height);
 
   return (source) => {
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, source);
+    upload(gl, source);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   };
 }
@@ -61,10 +74,12 @@ function build(gl, width, height, u1, v1) {
 const PROBE = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [32, 32, 32], [192, 128, 64]];
 const PROBE_W = 3, PROBE_H = 2, PROBE_K = 2;
 
-// Returns null when this device shows a canvas through WebGL exactly, or else the reason it does not.
-function probeWebgl(make) {
-  let src = null, cv = null, gl = null;
+// Draws a small known pattern into a corner of the screen by the given route and reads it back, exact to the
+// pixel. It happens before anything is shown, and the corner is cleared afterwards.
+function drawsExactly(gl, make, upload) {
+  let src = null;
   try {
+    for (let i = 0; i < 8 && gl.getError() !== gl.NO_ERROR; i++); // Errors left by an earlier attempt.
     src = make();
     src.width = PROBE_W;
     src.height = PROBE_H;
@@ -73,34 +88,27 @@ function probeWebgl(make) {
       c.fillStyle = `rgb(${rgb[0]},${rgb[1]},${rgb[2]})`;
       c.fillRect(i % PROBE_W, Math.floor(i / PROBE_W), 1, 1);
     });
-    cv = make();
-    cv.width = PROBE_W * PROBE_K;
-    cv.height = PROBE_H * PROBE_K;
-    gl = cv.getContext('webgl', OPTIONS);
-    if (!gl) return 'no-webgl';
-    build(gl, cv.width, cv.height, 1, 1)(src);
-    if (gl.getError() !== gl.NO_ERROR) return 'gl-error';
-    const px = new Uint8Array(cv.width * cv.height * 4);
-    gl.readPixels(0, 0, cv.width, cv.height, gl.RGBA, gl.UNSIGNED_BYTE, px);
-    for (let y = 0; y < cv.height; y++) {
-      for (let x = 0; x < cv.width; x++) {
-        const row = cv.height - 1 - y; // readPixels counts rows from the bottom.
+    const w = PROBE_W * PROBE_K, h = PROBE_H * PROBE_K;
+    build(gl, w, h, 1, 1, upload)(src);
+    if (gl.getError() !== gl.NO_ERROR) return false;
+    const px = new Uint8Array(w * h * 4);
+    gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const row = h - 1 - y; // readPixels counts rows from the bottom.
         const want = PROBE[Math.floor(row / PROBE_K) * PROBE_W + Math.floor(x / PROBE_K)];
-        const at = (y * cv.width + x) * 4;
-        for (let k = 0; k < 3; k++) if (Math.abs(px[at + k] - want[k]) > 2) return 'bad-pixels';
+        const at = (y * w + x) * 4;
+        for (let k = 0; k < 3; k++) if (Math.abs(px[at + k] - want[k]) > 2) return false;
       }
     }
-    return null;
+    return true;
   } catch (e) {
-    return 'exception';
+    return false;
   } finally {
-    const lose = gl && gl.getExtension && gl.getExtension('WEBGL_lose_context');
-    if (lose) lose.loseContext();
-    [src, cv].forEach((c) => {
-      if (!c) return;
-      c.width = 1;
-      c.height = 1;
-    });
+    if (src) {
+      src.width = 1;
+      src.height = 1;
+    }
   }
 }
 
@@ -137,8 +145,8 @@ function smoothingIgnored(make) {
   }
 }
 
-function webglScreen(gl, back, physW, physH, W, H, scale) {
-  const make = () => build(gl, gl.drawingBufferWidth, gl.drawingBufferHeight, physW / scale / W, physH / scale / H);
+function webglScreen(gl, back, physW, physH, W, H, scale, upload) {
+  const make = () => build(gl, gl.drawingBufferWidth, gl.drawingBufferHeight, physW / scale / W, physH / scale / H, upload);
   let draw = make();
   let lost = false;
   return () => {
@@ -165,17 +173,31 @@ function canvasScreen(ctx, back, W, H, scale) {
 function create(main, back, make, fit) {
   const { physW, physH, W, H, scale } = fit;
   const smoothing = smoothingIgnored(make);
-  let why = probeWebgl(make);
-  if (!why) {
-    try {
-      const gl = main.getContext('webgl', OPTIONS);
-      if (gl) return { mode: 'webgl', why: '', smoothing, draw: webglScreen(gl, back, physW, physH, W, H, scale), bufW: gl.drawingBufferWidth, bufH: gl.drawingBufferHeight };
-      why = 'no-context';
-    } catch (e) {
-      why = 'setup-failed';
-    }
+  const plain = (why) => ({ mode: '2d', why, smoothing, draw: canvasScreen(main.getContext('2d'), back, W, H, scale), bufW: physW, bufH: physH });
+  let gl = null;
+  try {
+    gl = main.getContext('webgl', OPTIONS);
+  } catch (e) {
+    gl = null;
   }
-  return { mode: '2d', why, smoothing, draw: canvasScreen(main.getContext('2d'), back, W, H, scale), bufW: physW, bufH: physH };
+  if (!gl) return plain('no-webgl');
+  // If neither route passes, the read-back may be what is failing, so the cheap route stays and the settings
+  // screen says it could not be verified.
+  let upload = fromCanvas, why = '';
+  if (!drawsExactly(gl, make, fromCanvas)) {
+    if (drawsExactly(gl, make, fromPixels)) {
+      upload = fromPixels;
+      why = 'pixels';
+    } else why = 'unverified';
+  }
+  try {
+    const draw = webglScreen(gl, back, physW, physH, W, H, scale, upload);
+    gl.clearColor(11 / 255, 10 / 255, 20 / 255, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    return { mode: 'webgl', why, smoothing, draw, bufW: gl.drawingBufferWidth, bufH: gl.drawingBufferHeight };
+  } catch (e) {
+    return plain('setup-failed'); // Browsers refuse this, and then nothing can be shown. Some runtimes may allow it.
+  }
 }
 
 module.exports = { create };
