@@ -2287,80 +2287,182 @@ test('resizing a sprite takes whole source pixels, so it can never invent a colo
 });
 
 // ---- Showing the frame ----
-// The browser suite runs the routes that pass the self-test on real WebGL. These are the ones a browser
-// cannot reach: a phone whose read-back fails, and a runtime that still offers 2D after WebGL.
+// Small canvases that really hold pixels, with switches for what a phone might get wrong. The browser suite
+// checks the same route on real canvases, for whole screens.
 const Present = require('../js/core/present.js');
 
-function fakeScreen({ compiles = true } = {}) {
-  const log = { asked: [], drawn: 0, uploaded: [], images: 0, reads: 0 };
-  const flat = () => ({
-    fillRect() {},
-    drawImage() { log.images++; },
-    getImageData: (x, y, w, h) => {
-      log.reads++;
-      return { data: new Uint8ClampedArray(w * h * 4) };
-    },
-  });
-  const known = {
-    drawingBufferWidth: 6,
-    drawingBufferHeight: 4,
-    NO_ERROR: 0,
-    getError: () => 0,
-    isContextLost: () => false,
-    getShaderParameter: () => compiles,
-    getProgramParameter: () => true,
-    drawArrays() { log.drawn++; },
-    texImage2D(...args) { log.uploaded.push(args[args.length - 1]); },
+function fakeCanvases({ noPut = false, noPartialPut = false, staleRead = false } = {}) {
+  const log = { asked: [], puts: [], reads: 0, draws: [] };
+  const made = [];
+  const make = () => {
+    const cv = {
+      width: 0,
+      height: 0,
+      px: null,
+      firstRead: null,
+      pixels() {
+        if (!this.px || this.px.length !== this.width * this.height) this.px = new Uint32Array(this.width * this.height);
+        return this.px;
+      },
+      getContext(type) {
+        log.asked.push(type);
+        if (type !== '2d') return null;
+        return {
+          createImageData: (w, h) => ({ width: w, height: h, data: new Uint8ClampedArray(w * h * 4) }),
+          fillRect: (x, y, w, h) => {
+            const px = cv.pixels();
+            for (let j = y; j < y + h; j++) for (let i = x; i < x + w; i++) px[j * cv.width + i] = cv.colour;
+          },
+          set fillStyle(rgb) {
+            const m = /rgb\((\d+),(\d+),(\d+)\)/.exec(rgb);
+            cv.colour = m ? ((255 << 24) | (Number(m[3]) << 16) | (Number(m[2]) << 8) | Number(m[1])) >>> 0 : 0xff000000;
+          },
+          getImageData: (x, y, w, h) => {
+            log.reads++;
+            const px = cv.pixels();
+            const copy = new Uint32Array(w * h);
+            for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) copy[j * w + i] = px[(y + j) * cv.width + x + i];
+            if (staleRead && cv.firstRead) return { data: new Uint8ClampedArray(cv.firstRead.buffer.slice(0)) };
+            if (!cv.firstRead) cv.firstRead = copy;
+            return { data: new Uint8ClampedArray(copy.buffer) };
+          },
+          putImageData: (im, dx, dy, ...dirty) => {
+            log.puts.push({ cv, dirty });
+            if (noPut || (noPartialPut && dirty.length)) return;
+            const [sx = 0, sy = 0, sw = im.width, sh = im.height] = dirty;
+            const from = new Uint32Array(im.data.buffer), px = cv.pixels();
+            for (let j = sy; j < sy + sh; j++) for (let i = sx; i < sx + sw; i++) px[j * cv.width + i] = from[j * im.width + i];
+          },
+          // Only the exact-size copy is modelled. Scaled draws are recorded, and only the fallback makes them.
+          drawImage: (img, x, y, w, h) => {
+            log.draws.push({ cv, img, w, h });
+            if (w !== undefined) return;
+            const px = cv.pixels(), from = img.pixels();
+            for (let i = 0; i < px.length; i++) px[i] = from[i];
+          },
+        };
+      },
+    };
+    made.push(cv);
+    return cv;
   };
-  // Everything else a phone's WebGL accepts without comment. readPixels leaves its buffer empty.
-  const gl = new Proxy(known, { get: (t, k) => (k in t ? t[k] : () => ({})) });
-  const make = () => ({
-    width: 0,
-    height: 0,
-    getContext(type) {
-      log.asked.push(type);
-      return type === '2d' ? flat() : null;
-    },
-  });
-  return { log, make, back: make(), main: { getContext: (type) => (type === 'webgl' ? gl : flat()) }, fit: { physW: 6, physH: 4, W: 3, H: 2, scale: 2 } };
+  return { log, make, made };
 }
 
-test('WebGL is only ever asked of the on-screen canvas, never a spare one', () => {
-  const s = fakeScreen();
-  Present.create(s.main, s.back, s.make, s.fit);
-  assert.ok(s.log.asked.length > 0, 'spare canvases were used for 2D work');
-  assert.ok(!s.log.asked.includes('webgl'), s.log.asked.join());
+function presented(options, fit) {
+  const s = fakeCanvases(options);
+  const main = s.make();
+  main.width = fit.physW;
+  main.height = fit.physH;
+  const back = s.make();
+  back.width = fit.W;
+  back.height = fit.H;
+  const screen = Present.create(main, back, s.make, fit);
+  const c = back.getContext('2d');
+  // Fills the buffer with one colour per buffer pixel, and says what the screen must then show.
+  const paint = (salt) => {
+    for (let y = 0; y < fit.H; y++) {
+      for (let x = 0; x < fit.W; x++) {
+        c.fillStyle = `rgb(${(x * 7 + salt) % 256},${(y * 5 + salt) % 256},${(x + y) % 256})`;
+        c.fillRect(x, y, 1, 1);
+      }
+    }
+  };
+  const wrong = () => {
+    const screenPx = main.pixels(), backPx = back.pixels();
+    let n = 0;
+    for (let y = 0; y < fit.physH; y++) {
+      for (let x = 0; x < fit.physW; x++) {
+        if (screenPx[y * fit.physW + x] !== backPx[Math.floor(y / fit.scale) * fit.W + Math.floor(x / fit.scale)]) n++;
+      }
+    }
+    return n;
+  };
+  return { ...s, main, back, screen, paint, wrong, c };
+}
+
+const FITS = [
+  { physW: 12, physH: 8, W: 6, H: 4, scale: 2 }, // Whole blocks.
+  { physW: 10, physH: 7, W: 4, H: 3, scale: 3 }, // The screen ends part way through a block on both axes.
+  { physW: 7, physH: 5, W: 7, H: 5, scale: 1 },
+  { physW: 1170, physH: 2532, W: 293, H: 633, scale: 4 }, // A real phone.
+];
+
+test('every screen pixel comes from exactly one buffer pixel, frame after frame, at any fit', () => {
+  for (const fit of FITS) {
+    const s = presented({}, fit);
+    assert.strictEqual(s.screen.mode, 'exact');
+    assert.strictEqual(s.screen.why, '');
+    for (const salt of [1, 90, 200]) {
+      s.paint(salt);
+      s.screen.draw();
+      assert.strictEqual(s.wrong(), 0, `${fit.physW}x${fit.physH} with salt ${salt}`);
+    }
+  }
 });
 
-test('a phone whose picture cannot be read back keeps WebGL, still copies pixels and says so', () => {
-  const s = fakeScreen();
-  const r = Present.create(s.main, s.back, s.make, s.fit);
-  assert.strictEqual(r.mode, 'webgl');
-  assert.strictEqual(r.why, 'unverified');
-  const before = s.log.drawn;
-  r.draw();
-  assert.strictEqual(s.log.drawn, before + 1);
-  assert.ok(s.log.uploaded[s.log.uploaded.length - 1] instanceof Uint8Array);
+test('a frame that changes one row writes only that row, and the rest of the screen stays right', () => {
+  const fit = FITS[1];
+  const s = presented({}, fit);
+  s.paint(1);
+  s.screen.draw();
+  s.log.puts.length = 0;
+  s.c.fillStyle = 'rgb(9,8,7)';
+  s.c.fillRect(1, 1, 1, 1);
+  s.screen.draw();
+  assert.strictEqual(s.log.puts.length, 1);
+  assert.deepStrictEqual(s.log.puts[0].dirty, [0, fit.scale, fit.physW, fit.scale]);
+  assert.strictEqual(s.wrong(), 0);
 });
 
-test('every frame reads the buffer afresh, and the buffer itself is never handed to WebGL', () => {
-  const s = fakeScreen();
-  const r = Present.create(s.main, s.back, s.make, s.fit);
-  const reads = s.log.reads, uploads = s.log.uploaded.length;
-  for (let i = 0; i < 3; i++) r.draw();
-  assert.strictEqual(s.log.reads, reads + 3);
-  assert.strictEqual(s.log.uploaded.length, uploads + 3);
-  assert.ok(!s.log.uploaded.includes(s.back));
+test('a frame with no change writes nothing, but the screen is still redrawn as it always was', () => {
+  const s = presented({}, FITS[0]);
+  s.paint(1);
+  s.screen.draw();
+  s.log.puts.length = 0;
+  s.log.draws.length = 0;
+  s.screen.draw();
+  assert.strictEqual(s.log.puts.length, 0);
+  assert.strictEqual(s.log.draws.length, 1);
+  assert.strictEqual(s.log.draws[0].cv, s.main);
 });
 
-test('a shader that will not build falls to 2D where the runtime still allows it', () => {
-  const s = fakeScreen({ compiles: false });
-  const r = Present.create(s.main, s.back, s.make, s.fit);
-  assert.strictEqual(r.mode, '2d');
-  assert.strictEqual(r.why, 'setup-failed');
-  const before = s.log.images;
-  r.draw();
-  assert.strictEqual(s.log.images, before + 1);
+test('nothing is ever scaled on the way to the screen by the exact route', () => {
+  const s = presented({}, FITS[1]);
+  s.paint(1);
+  s.screen.draw();
+  s.log.draws.filter((d) => d.cv === s.main).forEach((d) => assert.strictEqual(d.w, undefined));
+});
+
+test('WebGL is never asked of any canvas, because a frozen WebGL screen cannot be detected', () => {
+  const s = presented({}, FITS[0]);
+  assert.ok(s.log.asked.length > 0);
+  assert.ok(s.log.asked.every((type) => type === '2d'), s.log.asked.join());
+});
+
+test('a phone that gets partial writes wrong still gets exact pixels, by writing whole frames', () => {
+  const s = presented({ noPartialPut: true }, FITS[1]);
+  assert.strictEqual(s.screen.mode, 'exact');
+  assert.strictEqual(s.screen.why, 'full');
+  s.paint(1);
+  s.screen.draw();
+  s.c.fillStyle = 'rgb(9,8,7)';
+  s.c.fillRect(1, 1, 1, 1);
+  s.screen.draw();
+  assert.strictEqual(s.wrong(), 0);
+});
+
+test('a phone that cannot write or re-read pixels falls back to scaling on the 2D screen, and says so', () => {
+  for (const options of [{ noPut: true }, { staleRead: true }]) {
+    const fit = FITS[0];
+    const s = presented(options, fit);
+    assert.strictEqual(s.screen.mode, 'flag', JSON.stringify(options));
+    s.log.draws.length = 0;
+    s.screen.draw();
+    assert.strictEqual(s.log.draws.length, 1);
+    assert.strictEqual(s.log.draws[0].img, s.back);
+    assert.strictEqual(s.log.draws[0].w, fit.W * fit.scale);
+  }
 });
 
 // ---- Skill levels ----

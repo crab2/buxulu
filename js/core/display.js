@@ -44,9 +44,8 @@ function setFps(fps) {
   if (wx.setPreferredFramesPerSecond) wx.setPreferredFramesPerSecond(fps);
 }
 
-// Share cards default to a screenshot of the game, which a WebGL screen may not be able to give. The back
-// buffer is an ordinary canvas that always can. Returns nothing if the runtime cannot, and WeChat then
-// falls back to its own screenshot.
+// The share card is cut from the back buffer, an ordinary canvas. Returns nothing if the runtime cannot do
+// that, and WeChat then falls back to its own screenshot.
 function shareImage() {
   try {
     const height = Math.min(H, Math.round(W * 0.8));
@@ -63,5 +62,5 @@ module.exports = {
   shareImage,
   // What this device actually ended up with. The settings screen shows it, so a phone that looks wrong
   // can be diagnosed without a debugger.
-  info: { mode: screen.mode, why: screen.why, smoothing: screen.smoothing, pr, physW, physH, bufW: screen.bufW, bufH: screen.bufH },
+  info: { mode: screen.mode, why: screen.why, smoothing: screen.smoothing, pr, physW, physH },
 };

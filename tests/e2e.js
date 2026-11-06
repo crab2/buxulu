@@ -1524,7 +1524,7 @@ async function assertOnScreen(d, where) {
 
   // ---- The picture reaching the screen ----
   // Compares a whole frame on the visible canvas with a perfect block upscale of the buffer it came from.
-  // Reading inside the frame is what makes this reliable: a WebGL canvas may be cleared once it is composited.
+  // A buffer that froze would match a screen that froze, so tests that care also compare `picture` between reads.
   const readScreen = (d) => d.page.evaluate(() => new Promise((ok) => {
     const D = window.__BUXU__.display, real = D.present;
     D.present = function () {
@@ -1537,19 +1537,12 @@ async function assertOnScreen(d, where) {
       }
       const cv = document.getElementById('game');
       const pw = cv.width, ph = cv.height;
-      let px, bottomUp = false;
-      if (D.info.mode === 'webgl') {
-        const gl = cv.getContext('webgl');
-        px = new Uint8Array(pw * ph * 4);
-        gl.readPixels(0, 0, pw, ph, gl.RGBA, gl.UNSIGNED_BYTE, px);
-        bottomUp = true;
-      } else px = cv.getContext('2d').getImageData(0, 0, pw, ph).data;
+      const px = cv.getContext('2d').getImageData(0, 0, pw, ph).data;
       const back = D.ctx.getImageData(0, 0, D.W, D.H).data;
       let wrong = 0, lit = 0, picture = 0;
       for (let y = 0; y < ph; y++) {
-        const row = bottomUp ? ph - 1 - y : y;
         for (let x = 0; x < pw; x++) {
-          const a = (row * pw + x) * 4;
+          const a = (y * pw + x) * 4;
           const b = (Math.floor(y / D.scale) * D.W + Math.floor(x / D.scale)) * 4;
           if (Math.abs(px[a] - back[b]) > 2 || Math.abs(px[a + 1] - back[b + 1]) > 2 || Math.abs(px[a + 2] - back[b + 2]) > 2) wrong++;
           if (px[a] + px[a + 1] + px[a + 2] > 30) lit++;
@@ -1568,7 +1561,7 @@ async function assertOnScreen(d, where) {
       await go(d, scene);
       await d.page.waitForTimeout(300);
       const r = await readScreen(d);
-      assert.strictEqual(r.mode, 'webgl');
+      assert.strictEqual(r.mode, 'exact');
       assert.strictEqual(r.wrong, 0, `${scene}: ${(r.wrong * 100).toFixed(2)}% of pixels differ`);
       assert.ok(r.lit > 0.3, `${scene} should not be blank`);
     }
@@ -1583,87 +1576,85 @@ async function assertOnScreen(d, where) {
     await d.page.waitForTimeout(300);
     const r = await readScreen(d);
     assert.strictEqual(r.smoothing, true, 'the self-test notices this kind of phone');
-    assert.strictEqual(r.mode, 'webgl');
+    assert.strictEqual(r.mode, 'exact');
     assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
     await d.assertClean();
     await d.ctx.close();
   });
 
-  await check('sharp picture: this test really does catch blur, on the path the fix replaced', async () => {
-    const d = await open(browser, { speed: 3, query: '?smoothing=ignored&webgl=none' });
+  await check('sharp picture: this test really does catch blur, on the fallback that relies on the flag', async () => {
+    const d = await open(browser, { speed: 3, query: '?smoothing=ignored&pixels=broken' });
     await prepare(d, OPEN_ALL);
     await go(d, 'road');
     await d.page.waitForTimeout(300);
     const r = await readScreen(d);
-    assert.strictEqual(r.mode, '2d');
+    assert.strictEqual(r.mode, 'flag');
     assert.ok(r.wrong > 0.01, `expected visible blur here, found ${(r.wrong * 100).toFixed(2)}%`);
     await d.ctx.close();
   });
 
-  await check('sharp picture: a phone with WebGL only on the on-screen canvas still gets square pixels', async () => {
-    const d = await open(browser, { speed: 3, query: '?smoothing=ignored&webgl=onscreen' });
-    await prepare(d, OPEN_ALL);
-    await go(d, 'road');
-    await d.page.waitForTimeout(300);
-    const r = await readScreen(d);
-    assert.strictEqual(r.mode, 'webgl', `fell back to 2D: ${r.why}`);
-    assert.strictEqual(r.why, '');
-    assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
-    assert.ok(r.lit > 0.3, 'something is on the screen');
-    await d.assertClean();
-    await d.ctx.close();
-  });
-
-  // Each of these passed a self-test that uploaded only once, and the last three left the first frame on screen
-  // for good with the game still running behind it. Matching the buffer isn't enough on its own, because a buffer
-  // that froze matches a screen that froze, so the picture also has to change between two screens.
-  for (const [label, flag] of [
-    ['does nothing', 'blank'],
-    ['comes out upside down', 'flipped'],
-    ['repeats its first frame forever', 'stale'],
-    ['throws after the first time', 'throwing'],
-    ['stops the canvas being drawn on', 'locks'],
-  ]) {
-    await check(`live picture: a canvas upload that ${label} cannot stop the screen updating`, async () => {
-      const d = await open(browser, { speed: 3, query: `?webgl=${flag}` });
-      await prepare(d, OPEN_ALL);
-      await go(d, 'party');
-      await d.waitScene('Party');
-      const seen = [];
-      for (const where of ['party', 'road']) {
-        if (where === 'road') {
-          await d.tap('nav-road');
-          await d.waitScene('Road');
-        }
-        const r = await readScreen(d);
-        assert.strictEqual(r.mode, 'webgl');
-        assert.strictEqual(r.why, '');
-        assert.strictEqual(r.wrong, 0, `${where}: ${(r.wrong * 100).toFixed(2)}% of pixels differ`);
-        assert.ok(r.lit > 0.3, 'something is on the screen');
-        seen.push(r.picture);
-      }
-      assert.notStrictEqual(seen[0], seen[1], 'the picture changed between the two screens');
-      await d.assertClean();
-      await d.ctx.close();
-    });
-  }
-
-  await check('live picture: a phone where copying pixels fails hands over the canvas and says so', async () => {
-    const d = await open(browser, { speed: 3, query: '?webgl=nopixels' });
+  await check('sharp picture: a phone that cannot write pixels falls back to a picture that still moves', async () => {
+    const d = await open(browser, { speed: 3, query: '?pixels=broken' });
     await prepare(d, OPEN_ALL);
     await go(d, 'party');
     await d.waitScene('Party');
-    const r = await readScreen(d);
-    assert.strictEqual(r.mode, 'webgl');
-    assert.strictEqual(r.why, 'canvas');
-    assert.strictEqual(r.wrong, 0, `${(r.wrong * 100).toFixed(2)}% of pixels differ`);
+    const party = await readScreen(d);
+    assert.strictEqual(party.mode, 'flag');
+    assert.strictEqual(party.wrong, 0, 'where the flag works, the fallback is exact too');
+    assert.ok(party.lit > 0.3, 'something is on the screen');
+    await d.tap('nav-road');
+    await d.waitScene('Road');
+    const road = await readScreen(d);
+    assert.notStrictEqual(party.picture, road.picture, 'the picture changed');
     await d.assertClean();
     await d.ctx.close();
   });
 
-  await check('live picture: the self-test does not trust a canvas upload that only works the first time', async () => {
-    const d = await open(browser, { speed: 3, query: '?webgl=nopixels,stale' });
-    assert.strictEqual((await readScreen(d)).why, 'unverified');
+  await check('sharp picture: a phone that gets partial writes wrong writes whole frames instead', async () => {
+    const d = await open(browser, { speed: 3, query: '?pixels=whole&smoothing=ignored' });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'party');
+    await d.waitScene('Party');
+    const party = await readScreen(d);
+    assert.strictEqual(party.mode, 'exact');
+    assert.strictEqual(party.why, 'full');
+    assert.strictEqual(party.wrong, 0, `${(party.wrong * 100).toFixed(2)}% of pixels differ`);
+    await d.tap('nav-road');
+    await d.waitScene('Road');
+    const road = await readScreen(d);
+    assert.strictEqual(road.wrong, 0, `${(road.wrong * 100).toFixed(2)}% of pixels differ`);
+    assert.notStrictEqual(party.picture, road.picture, 'the picture changed');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('live picture: the screen keeps moving on its own, and follows a change of screen', async () => {
+    const d = await open(browser);
+    const seen = new Set();
+    for (let i = 0; i < 4; i++) {
+      const r = await readScreen(d);
+      assert.strictEqual(r.wrong, 0, `read ${i}: ${(r.wrong * 100).toFixed(2)}% of pixels differ`);
+      seen.add(r.picture);
+      await d.page.waitForTimeout(250);
+    }
+    assert.ok(seen.size >= 3, `the title screen should animate, but showed ${seen.size} pictures in 4 reads`);
+    await d.tap('title-start');
+    await d.page.waitForFunction(() => window.__BUXU__.game.top().constructor.name !== 'Title', null, { timeout: 8000 });
+    await d.page.waitForTimeout(400);
+    const after = await readScreen(d);
+    assert.strictEqual(after.wrong, 0, 'the screen after the tap matches the buffer');
+    assert.ok(!seen.has(after.picture), 'the tap reached the screen');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('live picture: the on-screen canvas is 2D, so the WebGL freeze cannot come back', async () => {
+    const d = await open(browser);
+    const kinds = await d.page.evaluate(() => {
+      const cv = document.getElementById('game');
+      return { twoD: !!cv.getContext('2d'), webgl: !!cv.getContext('webgl') };
+    });
+    assert.deepStrictEqual(kinds, { twoD: true, webgl: false });
     await d.ctx.close();
   });
 
@@ -1671,29 +1662,13 @@ async function assertOnScreen(d, where) {
     const d = await open(browser);
     await d.page.waitForFunction(() => window.__wxMock.toast, null, { timeout: 8000 });
     const message = await d.page.evaluate(() => window.__wxMock.toast);
-    const m = /^webgl f(\d+) e0$/.exec(message);
+    const m = /^exact f(\d+) e0 p(\d+)$/.exec(message);
     assert.ok(m && Number(m[1]) > 1, `unexpected report: ${message}`);
     await d.ctx.close();
     const released = await open(browser, { query: '?env=release' });
     await released.page.waitForTimeout(4500);
     assert.strictEqual(await released.page.evaluate(() => window.__wxMock.toast), undefined, 'a released build stays quiet');
     await released.ctx.close();
-  });
-
-  await check('sharp picture: no WebGL at all falls back to 2D rather than a black screen', async () => {
-    const d = await open(browser, { speed: 3, query: '?webgl=none' });
-    await prepare(d, OPEN_ALL);
-    await go(d, 'party');
-    await d.waitScene('Party');
-    const r = await readScreen(d);
-    assert.strictEqual(r.mode, '2d');
-    assert.strictEqual(r.why, 'no-webgl');
-    assert.strictEqual(r.wrong, 0, 'where the flag works, 2D is exact too');
-    assert.ok(r.lit > 0.3, 'something is on the screen');
-    await d.tap('nav-road');
-    await d.waitScene('Road');
-    await d.assertClean();
-    await d.ctx.close();
   });
 
   await check('sharp picture: enlarged numbers, text and icons stay crisp whatever the runtime filters', async () => {
@@ -1743,7 +1718,7 @@ async function assertOnScreen(d, where) {
         ok(B.ui.state.texts.map((t) => t.str));
       }));
     }));
-    assert.ok(texts.some((t) => /^webgl x\d+ \d+x\d+$/.test(t)), texts.join(' | '));
+    assert.ok(texts.some((t) => /^exact x\d+ \d+x\d+$/.test(t)), texts.join(' | '));
     assert.ok(texts.some((t) => /^\d+x\d+ pr[\d.]+ nearest$/.test(t)), texts.join(' | '));
     await assertTidy(d, 'settings');
     await d.assertClean();

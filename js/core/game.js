@@ -49,6 +49,7 @@ const game = {
   transition: null,
   errors: [],
   frames: 0,
+  presentMs: 0, // Time spent putting frames on the screen, for the report in builds that are not released.
   onTick: null, // Runs every frame whatever is on screen. The idle march hangs off this.
   lastTouch: 0,
 
@@ -219,7 +220,9 @@ function frame() {
     ui.state.enabled = true;
     ui.drawToast();
     drawTransition();
+    const before = Date.now();
     D.present();
+    game.presentMs += Date.now() - before;
   } catch (err) {
     // Report once per unique message and keep the loop alive, so one bad frame cannot freeze the game.
     const msg = String((err && err.stack) || err);
