@@ -27,7 +27,9 @@
       return realPut.apply(this, args);
     };
   }
-  const handlers = { start: [], move: [], end: [], cancel: [], show: [], hide: [] };
+  // audio=late: autoplay and any play() before the file has loaded are ignored. audio=broken: no file will load.
+  const audioMode = params.get('audio');
+  const handlers = { start: [], move: [], end: [], cancel: [], show: [], hide: [], interruptBegin: [], interruptEnd: [] };
   let first = true;
   let privacyHandler = null;
 
@@ -68,6 +70,16 @@
     auth: { 'scope.werun': params.get('werun') === 'denied' ? false : undefined },
     privacyAgreed: params.get('privacy') !== 'ask',
     calls: [],
+    audio: [],
+    interrupted: false,
+    playsIgnored: 0,
+    fire(name) { handlers[name].forEach((h) => h({})); },
+    // As the docs describe a call or an alarm: every sound stops, and play() does nothing until it is over.
+    interrupt(on) {
+      state.interrupted = on;
+      if (on) state.audio.forEach((a) => a.pause());
+      state.fire(on ? 'interruptBegin' : 'interruptEnd');
+    },
   };
 
   function cb(o, res, fail) {
@@ -116,18 +128,32 @@
     getUpdateManager: () => ({ onUpdateReady() {}, onCheckForUpdate() {}, onUpdateFailed() {}, applyUpdate() {} }),
     createInnerAudioContext() {
       const a = new Audio();
+      a.preload = 'auto';
+      state.audio.push(a);
+      const on = (type) => (h) => a.addEventListener(type, () => h({}));
       const ctx = {
-        get src() { return a.src; }, set src(v) { a.src = v; },
+        get src() { return a.src; }, set src(v) { a.src = audioMode === 'broken' ? 'data:audio/mpeg;base64,AAAA' : v; },
+        get autoplay() { return a.autoplay; }, set autoplay(v) { a.autoplay = !!v && audioMode !== 'late' && !state.interrupted; },
         get loop() { return a.loop; }, set loop(v) { a.loop = v; },
         get volume() { return a.volume; }, set volume(v) { a.volume = v; },
         get paused() { return a.paused; },
-        play() { const p = a.play(); if (p && p.catch) p.catch(() => audioUnlock.push(() => a.play().catch(() => {}))); },
+        get currentTime() { return a.currentTime; },
+        play() {
+          if (state.interrupted || (audioMode === 'late' && a.readyState < 3)) { state.playsIgnored++; return; }
+          const p = a.play();
+          if (p && p.catch) p.catch(() => audioUnlock.push(() => a.play().catch(() => {})));
+        },
         pause() { a.pause(); }, stop() { a.pause(); try { a.currentTime = 0; } catch (e) { /* not loaded */ } },
         seek(t) { try { a.currentTime = t; } catch (e) { /* not loaded */ } },
-        destroy() { a.pause(); }, onError() {},
+        destroy() { a.pause(); },
+        onCanplay: on('canplay'), onPlay: on('playing'), onPause: on('pause'), onEnded: on('ended'), onStop() {}, onTimeUpdate: on('timeupdate'),
+        onError(h) { a.addEventListener('error', () => h({ errCode: a.error ? a.error.code : -1, errMsg: 'stand-in' })); },
       };
       return ctx;
     },
+    setInnerAudioOption(o) { state.audioOption = o; },
+    onAudioInterruptionBegin: (h) => handlers.interruptBegin.push(h),
+    onAudioInterruptionEnd: (h) => handlers.interruptEnd.push(h),
     // Authorisation flow
     onNeedPrivacyAuthorization(h) { privacyHandler = h; },
     requirePrivacyAuthorize(o) {

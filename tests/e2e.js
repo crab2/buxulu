@@ -138,8 +138,15 @@ async function assertTidy(d, where) {
       const { texts, boxes } = B.ui.state;
       const out = [];
       const W = B.ui.W;
-      texts.forEach((t) => {
+      texts.forEach((t, i) => {
         if (t.x < -1 || t.x + t.w > W + 1) out.push(`"${t.str}" runs off the screen (x ${Math.round(t.x)}..${Math.round(t.x + t.w)} of ${W})`);
+        texts.slice(i + 1).forEach((u) => {
+          // Fixed bars are drawn over a list that scrolls under them, which hides what is in the way.
+          if (t.clipped !== u.clipped) return;
+          const ox = Math.min(t.x + t.w, u.x + u.w) - Math.max(t.x, u.x);
+          const oy = Math.min(t.y + t.h, u.y + u.h) - Math.max(t.y, u.y);
+          if (ox > 1 && oy > 3) out.push(`"${t.str}" is printed over "${u.str}"`);
+        });
         boxes.forEach((b) => {
           // A list runs on under the fixed bars. A button scrolled out of its clip cannot touch what is drawn over it.
           if (b.clip && !t.clipped && (t.y + t.h <= b.clip.y || t.y >= b.clip.y + b.clip.h)) return;
@@ -1664,6 +1671,9 @@ async function assertOnScreen(d, where) {
     const message = await d.page.evaluate(() => window.__wxMock.toast);
     const m = /^exact f(\d+) e0 p(\d+)$/.exec(message);
     assert.ok(m && Number(m[1]) > 1, `unexpected report: ${message}`);
+    // Then what the music is doing, once that message has had its time on screen.
+    await d.page.waitForFunction(() => window.__wxMock.toast.startsWith('bgm '), null, { timeout: 8000 });
+    assert.ok(/^bgm title on t\d+ file\? e- s-$/.test(await d.page.evaluate(() => window.__wxMock.toast)));
     await d.ctx.close();
     const released = await open(browser, { query: '?env=release' });
     await released.page.waitForTimeout(4500);
@@ -1888,6 +1898,103 @@ async function assertOnScreen(d, where) {
     });
     assert.strictEqual(left.dimTo, 0, 'the field does not stay dark afterwards');
     assert.strictEqual(left.cast, null);
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  for (const [name, viewport, dpr] of SIZES) {
+    await check(`today's stride at ${name}: every stage says its steps and its bonus without overlapping`, async () => {
+      const d = await open(browser, { viewport, dpr, query: `?dpr=${dpr}&fill=1` });
+      await prepare(d, 'B.steps.mockAddSteps(7000)');
+      await go(d, 'altar');
+      await d.page.waitForTimeout(400);
+      if ((await d.scene()) === 'Modal') await d.closeModals();
+      await assertTidy(d, 'altar with steps');
+      const seen = await d.page.evaluate(() => new Promise((ok) => {
+        const B = window.__BUXU__;
+        B.ui.state.debug = true;
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          const t = B.ui.state.texts.map((x) => x.str);
+          B.ui.state.debug = false;
+          ok(t);
+        }));
+      }));
+      ['3千', '6千', '1万', '1.5万', '+5%', '+10%', '+15%', '+20%'].forEach((str) => assert.ok(seen.includes(str), `${str} is on screen, so the check above covered it`));
+      await d.assertClean();
+      await d.ctx.close();
+    });
+  }
+
+  // What the music's real audio objects are doing, by file name.
+  const music = (d) => d.page.evaluate(() => {
+    const name = (a) => Object.keys(window.__AUDIO__).find((k) => window.__AUDIO__[k] === a.src) || '';
+    return window.__wxMock.audio.filter((a) => /bgm_/.test(name(a))).filter((a) => !a.paused).map((a) => name(a).replace(/.*bgm_|\.mp3/g, ''));
+  });
+  const musicIs = async (d, want, why) => {
+    const t0 = Date.now();
+    let now = [];
+    while (Date.now() - t0 < 5000) {
+      now = await music(d);
+      if (now.join() === want.join()) return;
+      await d.page.waitForTimeout(60);
+    }
+    assert.deepStrictEqual(now, want, why);
+  };
+
+  await check('music: one tune at a time through tabs, a call, the background and the switch', async () => {
+    const d = await open(browser);
+    await musicIs(d, ['title'], 'plays on the title screen');
+    assert.strictEqual(await d.page.evaluate(() => window.__wxMock.audioOption), undefined, 'the mute switch stays in charge');
+    await prepare(d, '');
+    for (const tab of ['road', 'party', 'station', 'trials', 'altar']) {
+      await go(d, tab);
+      await musicIs(d, ['road'], `the road tune plays on ${tab}`);
+    }
+    const before = await d.page.evaluate(() => window.__wxMock.audio.length);
+    await go(d, 'road');
+    await d.page.evaluate(() => window.__wxMock.interrupt(true));
+    await musicIs(d, [], 'a call stops everything');
+    await d.page.evaluate(() => window.__wxMock.interrupt(false));
+    await musicIs(d, ['road'], 'and it comes back without a touch');
+    await d.page.evaluate(() => window.__wxMock.fire('hide'));
+    await musicIs(d, [], 'silent in the background');
+    await d.page.evaluate(() => window.__wxMock.fire('show'));
+    await musicIs(d, ['road'], 'back with the game');
+    assert.strictEqual(await d.page.evaluate(() => window.__wxMock.audio.length), before, 'nothing piles up');
+    await d.page.evaluate(() => window.__BUXU__.game.go('station', null, true));
+    await d.page.evaluate(() => window.__BUXU__.game.push('settings'));
+    await d.tap('set-bgm');
+    await musicIs(d, [], 'the switch turns it off');
+    await d.page.evaluate(() => window.__wxMock.fire('show'));
+    await d.page.waitForTimeout(1300);
+    assert.deepStrictEqual(await music(d), [], 'and nothing turns it back on behind the player\'s back');
+    assert.ok((await d.page.evaluate(() => window.__BUXU__.audio.report())).startsWith('set0 '));
+    await d.tap('set-bgm');
+    await musicIs(d, ['road'], 'and on again');
+    assert.ok((await d.page.evaluate(() => window.__BUXU__.audio.report())).startsWith('bgm road on '));
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('music: starts by itself on a phone that ignores autoplay and an early play()', async () => {
+    const d = await open(browser, { query: '?audio=late' });
+    await musicIs(d, ['title'], 'plays although the first requests went nowhere');
+    await prepare(d, '');
+    await go(d, 'road');
+    await musicIs(d, ['road']);
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('music: a phone that cannot load a file loses only the sound, and says so', async () => {
+    const d = await open(browser, { query: '?audio=broken' });
+    await prepare(d, '');
+    await go(d, 'road');
+    await d.page.waitForTimeout(600);
+    assert.deepStrictEqual(await music(d), []);
+    assert.ok(/^bgm road off t0 file\? e[^-]/.test(await d.page.evaluate(() => window.__BUXU__.audio.report())), 'the error code is on the report');
+    await d.tap('nav-station');
+    await d.waitScene('Station');
     await d.assertClean();
     await d.ctx.close();
   });

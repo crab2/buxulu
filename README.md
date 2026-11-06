@@ -228,6 +228,19 @@ If this route ever proves too slow on a phone, the untested lead is `preserveDra
 
 **To check a phone:** the bottom of the settings screen says what it ended up with, for example `exact x4 293x633` and `1170x2532 pr3 nearest`. A frozen picture can't reach that screen, so a build that isn't released also shows a native toast about 4 seconds in, for example `exact f120 e0 p5`. That is how the frame is shown, the frames run so far, the number of different errors they hit and the average milliseconds a frame takes to reach the screen. About 120 frames at that point means a steady 30 a second. A count near 1 under a stuck picture means the frame loop stopped.
 
+**To check the music on a phone:** a second toast about 8.5 seconds in, and the last line of the settings screen, say what the music is doing, for example `bgm road on t12 file1 e- s-`.
+
+| Part | Meaning |
+|---|---|
+| `set0` at the start | The music switch in settings is off |
+| `on` / `off` / `int` | The phone reports it playing, not playing, or interrupted by something like a call |
+| `t12` | Seconds into the tune. A number that climbs means it really is playing |
+| `file1` / `file0` | Whether the phone can find the file in the package. `?` means it can't check |
+| `e-` / `e10003` | The tune's last error from the phone |
+| `s-` / `s10003` | The last error from any sound effect |
+
+If it says `on` with a climbing `t` and nothing can be heard, the game is doing its part, and the phone's mute switch and media volume are the next things to check.
+
 | Part | Meaning |
 |---|---|
 | `exact` | Enlarged in code, and the self-test passed. This is the sharp path |
@@ -302,7 +315,7 @@ tools/                Font subsetter, audio generator, web preview bundler and w
 tests/                Offline tests, balance simulation, browser end-to-end tests
 ```
 
-The package is about 1.8 MB, against WeChat's 4 MB main package limit. `packOptions` in `project.config.json` keeps `tools/`, `tests/`, `dist/` and `node_modules/` out of the upload.
+The package is about 1.8 MB, against WeChat's 4 MB main package limit. `packOptions` in `project.config.json` keeps `tools/`, `tests/`, `dist/` and `node_modules/` out of the upload and always includes `assets/audio/`. WeChat's filter for unused files is off, because its docs don't say what it does with a sound the code picks at run time.
 
 Saves from the turn-based version upgrade automatically. Progress and Stardust carry over, and training tiers double, because each tier is now half as strong.
 
@@ -333,6 +346,7 @@ Everything above ran against a browser stand-in for the WeChat runtime (`tools/w
 - **The frozen picture on a real phone.** It has only been seen on a phone with WebGL, and its cause is unknown. The on-screen canvas no longer uses WebGL, and this new route still needs a real run to confirm that the picture moves and stays sharp.
 - The real WeRun, privacy and cloud calls. The API shapes follow the official docs, but no live call has been made.
 - `putImageData`, `multiply` blending, `wx.setPreferredFramesPerSecond`, `wx.setKeepScreenOn` and `wx.onMemoryWarning` on real devices. Each has a feature check or fallback, so a gap should mean a plainer or slower result rather than a crash.
-- Audio. The files decode and aren't silent or clipped, but nobody has listened to them yet.
+- **Music on a real phone.** It was reported missing on a phone, and it plays correctly in the browser, so the cause isn't known. The game now restarts the music after a call or a stopped loop, keeps asking until the phone says it's playing, and forces the audio files into the package. An iPhone on mute stays silent on purpose. The report under "To check a phone" says which of these it was, if none of them fixes it.
+- Audio quality. The files decode and aren't silent or clipped, but nobody has listened to them yet.
 - Frame rate and heat on low-end phones. The draw-call and memory figures above are measured in a browser, not on a phone.
 - Real players. The pacing comes from simulated players, so the numbers will need tuning once people actually play. That goes double for the draw: how it feels, how many letters feel like enough, and whether the set effects are worth building around. The odds and costs all live in `js/data/gear.js`.

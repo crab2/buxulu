@@ -2212,6 +2212,205 @@ test('project files have the shape WeChat DevTools expects', () => {
   });
 });
 
+// ---- Audio ----
+// A stand-in for a phone's audio, harsher than a browser: nothing plays unless the test says so, and events only
+// arrive when the test sends them.
+function audioPhone() {
+  const made = [];
+  const phone = { made, option: null, begin: null, end: null };
+  global.wx = {
+    createInnerAudioContext() {
+      const c = { plays: 0, pauses: 0, destroyed: false, on: {}, currentTime: 0, atSrc: null };
+      ['onCanplay', 'onPlay', 'onPause', 'onStop', 'onEnded', 'onError', 'onTimeUpdate'].forEach((e) => { c[e] = (h) => { c.on[e] = h; }; });
+      c.play = () => { c.plays++; };
+      c.pause = () => { c.pauses++; };
+      c.destroy = () => { c.destroyed = true; };
+      Object.defineProperty(c, 'src', { set(v) { c.path = v; c.atSrc = { autoplay: c.autoplay, loop: c.loop, volume: c.volume }; } });
+      made.push(c);
+      return c;
+    },
+    setInnerAudioOption(o) { phone.option = o; },
+    onAudioInterruptionBegin(h) { phone.begin = h; },
+    onAudioInterruptionEnd(h) { phone.end = h; },
+  };
+  const key = require.resolve('../js/core/audio.js');
+  delete require.cache[key];
+  phone.audio = require(key);
+  phone.audio.setup();
+  phone.audio.configure({ bgm: true, sfx: true, vibrate: true });
+  return phone;
+}
+const audioTest = (name, fn) => test(`music: ${name}`, () => {
+  try {
+    fn(audioPhone());
+  } finally {
+    delete global.wx;
+  }
+});
+
+audioTest('the file is named last, with autoplay, looping and volume already set', ({ audio, made }) => {
+  audio.bgm('road');
+  assert.strictEqual(made[0].path, 'assets/audio/bgm_road.mp3');
+  assert.deepStrictEqual(made[0].atSrc, { autoplay: true, loop: true, volume: 0.45 });
+});
+
+audioTest('a phone on mute stays silent, because the game never overrides the mute switch', ({ option }) => {
+  assert.strictEqual(option, null);
+});
+
+audioTest('asks again when loaded and every second until the phone says it is playing, then stops asking', ({ audio, made }) => {
+  audio.bgm('road');
+  const c = made[0];
+  c.on.onCanplay();
+  assert.strictEqual(c.plays, 1, 'asked once the file could play');
+  audio.keep();
+  assert.strictEqual(c.plays, 2, 'autoplay and that play() were both ignored, so it asks again');
+  c.on.onPlay();
+  audio.keep();
+  audio.keep();
+  assert.strictEqual(c.plays, 2, 'a tune that is playing is left alone');
+});
+
+audioTest('moving between screens with the same tune does not disturb it', ({ audio, made }) => {
+  audio.bgm('road');
+  made[0].on.onPlay();
+  audio.bgm('road');
+  audio.bgm('road');
+  assert.strictEqual(made.length, 1);
+  assert.strictEqual(made[0].plays, 0);
+  assert.strictEqual(made[0].pauses, 0);
+});
+
+audioTest('a new tune pauses the old one, and the old one carries on when it returns', ({ audio, made }) => {
+  audio.bgm('road');
+  made[0].on.onPlay();
+  audio.bgm('battle');
+  assert.strictEqual(made[0].pauses, 1);
+  assert.strictEqual(made[0].destroyed, false);
+  made[0].on.onPause();
+  made[1].on.onPlay();
+  audio.bgm(null);
+  assert.strictEqual(made[1].pauses, 1, 'the win and lose jingles play over silence');
+  audio.bgm('road');
+  assert.strictEqual(made.length, 2, 'no second copy of the road tune');
+  assert.strictEqual(made[0].plays, 1);
+});
+
+audioTest('a slow tune that starts after the player moved on is stopped at once, so two never play together', ({ audio, made }) => {
+  audio.bgm('title');
+  audio.bgm('road');
+  made[1].on.onPlay();
+  const before = made[0].pauses;
+  made[0].on.onPlay();
+  assert.strictEqual(made[0].pauses, before + 1);
+  audio.keep();
+  assert.strictEqual(made[0].plays, 0);
+  assert.strictEqual(made[1].plays, 0);
+});
+
+audioTest('comes back after a call, and does not fight it while it lasts', ({ audio, made, begin, end }) => {
+  audio.bgm('road');
+  made[0].on.onPlay();
+  begin();
+  audio.keep();
+  assert.strictEqual(made[0].plays, 0, 'nothing can play during the interruption');
+  end();
+  assert.strictEqual(made[0].plays, 1, 'asked as soon as it ended, although the phone never reported a pause');
+});
+
+audioTest('going to the background pauses it, coming back plays it, even if the end of a call was missed', ({ audio, made, begin }) => {
+  audio.bgm('road');
+  made[0].on.onPlay();
+  audio.pause();
+  assert.strictEqual(made[0].pauses, 1);
+  audio.keep();
+  assert.strictEqual(made[0].plays, 0);
+  made[0].on.onPlay();
+  assert.strictEqual(made[0].pauses, 2, 'a slow start while away is stopped');
+  begin();
+  audio.resume();
+  assert.strictEqual(made[0].plays, 1);
+});
+
+audioTest('the music switch is obeyed, including at the very first start', ({ audio, made }) => {
+  const off = { bgm: false, sfx: true };
+  audio.configure(off);
+  audio.bgm('road');
+  assert.strictEqual(made[0].atSrc.autoplay, false);
+  audio.keep();
+  assert.strictEqual(made[0].plays, 0);
+  assert.ok(audio.report().startsWith('set0 '), audio.report());
+  audio.configure({ bgm: true, sfx: true });
+  assert.strictEqual(made[0].plays, 1);
+  made[0].on.onPlay();
+  audio.configure(off);
+  assert.strictEqual(made[0].pauses, 1);
+});
+
+audioTest('a tune that ends despite looping starts again', ({ audio, made }) => {
+  audio.bgm('road');
+  made[0].on.onPlay();
+  made[0].on.onEnded();
+  audio.keep();
+  assert.strictEqual(made[0].plays, 1);
+});
+
+audioTest('a failed file is reported and left alone until a screen asks for it again', ({ audio, made }) => {
+  audio.bgm('road');
+  made[0].on.onError({ errCode: 10003, errMsg: 'file error' });
+  audio.keep();
+  audio.keep();
+  assert.strictEqual(made[0].plays, 0, 'no hammering a file that is not there');
+  assert.ok(audio.report().includes('e10003'), audio.report());
+  audio.bgm('road');
+  assert.strictEqual(made[0].destroyed, true);
+  assert.strictEqual(made.length, 2);
+  assert.ok(audio.report().includes('e-'), audio.report());
+});
+
+audioTest('the report says what is happening, in characters the font is sure to have', ({ audio, made }) => {
+  assert.strictEqual(audio.report(), 'bgm none s-');
+  audio.bgm('road');
+  assert.strictEqual(audio.report(), 'bgm road off t0 file? e- s-');
+  made[0].on.onPlay();
+  made[0].currentTime = 12.4;
+  assert.strictEqual(audio.report(), 'bgm road on t12 file? e- s-');
+  global.wx.getFileSystemManager = () => ({ accessSync() { throw new Error('no such file'); } });
+  audio.bgm('battle');
+  assert.strictEqual(audio.report(), 'bgm battle off t0 file0 e- s-');
+  audio.sfx('coin');
+  made[made.length - 1].on.onError({ errMsg: 'a very long message that would run off the panel' });
+  assert.ok(audio.report().length < 50, audio.report());
+  assert.ok(/^[\x20-\x7e]+$/.test(audio.report()));
+});
+
+test('every sound is forced into the package, and each file on disk is one the game can name', () => {
+  const pc = JSON.parse(fs.readFileSync(path.join(ROOT, 'project.config.json')));
+  assert.strictEqual(pc.setting.ignoreUploadUnusedFiles, false, 'audio paths are chosen at run time, so a filter could take them for unused');
+  assert.strictEqual(pc.setting.ignoreDevUnusedFiles, false, 'this one defaults to on for preview builds');
+  assert.ok(pc.packOptions.include.some((r) => r.type === 'folder' && r.value === 'assets/audio'));
+  assert.ok(!pc.packOptions.ignore.some((r) => /audio|assets|mp3/.test(r.value)));
+  global.wx = {};
+  try {
+    const key = require.resolve('../js/core/audio.js');
+    delete require.cache[key];
+    const { MUSIC, SFX } = require(key);
+    const named = Object.values(MUSIC).concat(Object.values(SFX)).sort();
+    const onDisk = fs.readdirSync(path.join(ROOT, 'assets/audio')).map((f) => 'assets/audio/' + f).sort();
+    assert.deepStrictEqual(named, onDisk);
+    // Written whole in the source, where a scan for the files in use can find them.
+    const src = fs.readFileSync(key, 'utf8');
+    named.forEach((p) => assert.ok(src.includes(`'${p}'`), p));
+    gameFiles().forEach((f) => {
+      const code = fs.readFileSync(f, 'utf8');
+      for (const m of code.matchAll(/audio\.bgm\('(\w+)'\)/g)) assert.ok(MUSIC[m[1]], `${f} asks for tune "${m[1]}"`);
+      for (const m of code.matchAll(/audio\.sfx\('(\w+)'\)/g)) assert.ok(SFX[m[1]], `${f} asks for sound "${m[1]}"`);
+    });
+  } finally {
+    delete global.wx;
+  }
+});
+
 test('package stays under the 4 MB main package limit', () => {
   let size = 0;
   const add = (p) => {

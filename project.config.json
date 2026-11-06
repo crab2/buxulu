@@ -11,7 +11,8 @@
     "postcss": false,
     "minified": true,
     "coverView": false,
-    "ignoreUploadUnusedFiles": true,
+    "ignoreUploadUnusedFiles": false,
+    "ignoreDevUnusedFiles": false,
     "compileWorklet": false,
     "uglifyFileName": false,
     "uploadWithSourceMap": true,
@@ -60,7 +61,12 @@
         "type": "file"
       }
     ],
-    "include": []
+    "include": [
+      {
+        "value": "assets/audio",
+        "type": "folder"
+      }
+    ]
   },
   "simulatorPluginLibVersion": {},
   "isGameTourist": false,
