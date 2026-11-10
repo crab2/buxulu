@@ -77,6 +77,17 @@ function tint(color, h, washAlpha) {
   }
 }
 
+// A region's scenery behind a screen of lists and panels: dimmed all over, then sinking into ink toward the
+// bottom, so the panels sit on a picture at the top and on quiet darkness below it.
+function backdrop(theme, dim) {
+  ctx.drawImage(art.battleBg(theme, W, H), 0, 0);
+  alpha(dim);
+  rect(0, 0, W, H, '#07061a');
+  alpha(1);
+  const y0 = Math.round(H * 0.4);
+  tileX(art.scrim(H - y0), 0, y0);
+}
+
 // Draws a repeating band of scenery, wrapped horizontally.
 function tileX(cv, offset, y) {
   const w = cv.width;
@@ -305,6 +316,32 @@ function drawToast() {
   alpha(1);
 }
 
+// A short rising note under the header: the party just got stronger, and by how much.
+function flyer(text, icon) {
+  state.flyer = { text, icon, t: 0 };
+}
+
+function drawFlyer() {
+  const f = state.flyer;
+  if (!f) return;
+  const life = 1.8;
+  if (f.t >= life) {
+    state.flyer = null;
+    return;
+  }
+  const tw = font.width(f.text) + (f.icon ? 18 : 0);
+  const x = Math.round((W - tw) / 2);
+  const y = Math.round(D.contentTop + 44 - Math.min(1, f.t * 5) * 8 - f.t * 5);
+  alpha(f.t > life - 0.4 ? Math.max(0, (life - f.t) / 0.4) : 1);
+  rect(x - 7, y - 3, tw + 14, 18, UI.ink);
+  rect(x - 6, y - 2, tw + 12, 16, '#3a2a14');
+  rect(x - 6, y - 2, tw + 12, 1, UI.line);
+  rect(x - 6, y + 13, tw + 12, 1, UI.line);
+  if (f.icon) img(art.icon(f.icon), x - 2, y - 2);
+  font.draw(ctx, f.text, x + (f.icon ? 16 : 0), y + 1, UI.gold);
+  alpha(1);
+}
+
 function fmt(n) {
   return Number(n).toLocaleString('en-US');
 }
@@ -332,6 +369,6 @@ function iconNum(icon, value, x, y, color) {
 }
 
 module.exports = {
-  state, rect, alpha, img, imgScaled, imgFlip, tileX, tint, text, para, paraHeight, numberBig, panel, bar, button, dot, hit, setClip, endClip,
-  chip, chips, header, toast, drawToast, fmt, num, dur, iconNum, ctx, W, H, font, audio,
+  state, rect, alpha, img, backdrop, imgScaled, imgFlip, tileX, tint, text, para, paraHeight, numberBig, panel, bar, button, dot, hit, setClip, endClip,
+  chip, chips, header, toast, drawToast, flyer, drawFlyer, fmt, num, dur, iconNum, ctx, W, H, font, audio,
 };

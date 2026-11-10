@@ -7,6 +7,8 @@ const clock = require('./core/clock.js');
 const store = require('./systems/store.js');
 const steps = require('./systems/steps.js');
 const Idle = require('./systems/idle.js');
+const P = require('./systems/party.js');
+const ui = require('./core/ui.js');
 const W = require('./data/world.js');
 const O = require('./scenes/overlays.js');
 require('./scenes/title.js');
@@ -55,6 +57,15 @@ game.lastTouch = Date.now();
 
 // The march runs off the wall clock, once a second whatever is on screen.
 let tick = 0, saveTick = 0;
+// The party's rating as last seen, so a rise can be announced whatever caused it and wherever it happened.
+let seenPower = 0, seenSave = null;
+function watchPower() {
+  const s = store.get();
+  const now = Math.round(P.power(s));
+  if (s === seenSave && s.flags.intro && now > seenPower && seenPower > 0) ui.flyer(`战力 +${ui.num(now - seenPower)}`, 'power');
+  seenPower = now;
+  seenSave = s;
+}
 function syncIdle() {
   const s = store.get();
   return Idle.sync(s, clock.now());
@@ -65,6 +76,7 @@ game.onTick = (dt) => {
   if (tick >= 1) {
     tick = 0;
     syncIdle();
+    watchPower();
     audio.keep();
     if (!store.get().settings.smooth) setFps(Date.now() - game.lastTouch > IDLE_AFTER_MS ? 15 : 30);
   }
@@ -146,6 +158,6 @@ store.pull().then((replaced) => {
 if (typeof GameGlobal !== 'undefined' && GameGlobal.__PREVIEW__) {
   GameGlobal.__BUXU__ = {
     game, store, steps, clock, audio, idle: Idle, art, display: D, chapters: require('./data/chapters.js'), ui: require('./core/ui.js'), font: require('./core/font.js'),
-    party: require('./systems/party.js'), skills: require('./systems/skills.js'), gear: require('./systems/gear.js'), gacha: require('./systems/gacha.js'), gearData: require('./data/gear.js'),
+    party: require('./systems/party.js'), skills: require('./systems/skills.js'), gear: require('./systems/gear.js'), gacha: require('./systems/gacha.js'), gearData: require('./data/gear.js'), quests: require('./systems/quests.js'),
   };
 }

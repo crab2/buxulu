@@ -23,13 +23,27 @@ const Campaign = require('./campaign.js');
 const { Weather, Particles } = require('../core/fx.js');
 const { SkillFx } = require('../core/skillfx.js');
 const Skills = require('../systems/skills.js');
+const Quests = require('../systems/quests.js');
+const Finds = require('../systems/finds.js');
 const { UI } = require('../core/palette.js');
 const { TIPS } = require('../data/story.js');
 
 const { W, H } = D;
-const PANEL_H = 146;
+const PANEL_H = 172;
 const WALK_SPEED = 26; // scenery pixels per second at normal pace
 const QUIET_AFTER_MS = 30000;
+// Where a goal sends the player. Screens reached from a tab go through that tab's own way in.
+const QUEST_GO = {
+  party: () => nav.go('party'),
+  skills: () => game.go('skills', { hero: 'cen' }, true),
+  dispatch: () => game.go('dispatch'),
+  garden: () => game.go('garden'),
+  furnace: () => game.go('furnace'),
+  tower: () => game.go('tower'),
+  wander: () => game.go('wander'),
+  gacha: () => game.go('gacha', { from: 'trials' }),
+};
+const LANTERN_SPEED = 13;
 const NODE_NAME = { fight: '遭遇战', elite: '强敌', event: '路遇', chest: '脚力宝箱', boss: '星位' };
 
 // Tints the scene by the real time of day. The summer region's sun never moves, and the last has no sky.
@@ -291,6 +305,8 @@ class Road {
     this.bannerQ = [];
     this.forecast = null;
     this.forecastKey = '';
+    this.lantern = null;
+    this.lanternIn = 8 + Math.random() * 6;
   }
   syncView(s) {
     const ci = Idle.currentChapterIndex(s);
@@ -304,7 +320,7 @@ class Road {
     this.view.setParty(s);
     this.view.pool = Idle.poolFor(ci);
     this.view.packX = 24;
-    this.view.packY = this.sceneH + 26;
+    this.view.packY = this.sceneH + 51;
   }
   enter() {
     const s = store.get();
@@ -390,6 +406,152 @@ class Road {
       if (this.banner.t <= 0) this.banner = null;
     }
     if (!this.banner && this.bannerQ.length) this.banner = { text: this.bannerQ.shift(), t: 1.6 };
+    this.updateLantern(s, dt, now);
+  }
+  // A sky lantern drifts across now and then, for whoever happens to be watching.
+  updateLantern(s, dt, now) {
+    const l = this.lantern;
+    if (l) {
+      l.t += dt;
+      l.x -= LANTERN_SPEED * dt;
+      l.y -= 2.5 * dt;
+      if (Math.random() < dt * 5) this.view.fx.add({ x: l.x + (Math.random() - 0.5) * 6, y: l.y + 10, vx: 0, vy: 7, life: 0.7, c: Math.random() > 0.5 ? '#f7dd7a' : '#ec7a4e', s: 1 });
+      if (l.x < -20) this.lantern = null;
+      return;
+    }
+    this.lanternIn -= dt;
+    if (this.lanternIn > 0) return;
+    this.lanternIn = 50 + Math.random() * 40;
+    if (!s.flags.intro || Finds.left(s, Idle.dayOf(now)) <= 0) return;
+    const top = D.contentTop + 58;
+    this.lantern = { x: W + 12, y: top + Math.random() * Math.max(10, this.sceneH * 0.42 - top), t: 0 };
+  }
+  catchLantern() {
+    const s = store.get();
+    const l = this.lantern;
+    if (!l) return;
+    this.lantern = null;
+    const got = Finds.claim(s, clock.now());
+    if (!got) return;
+    store.persist();
+    audio.sfx('star');
+    audio.buzz('light');
+    const v = this.view;
+    v.fx.burst(l.x, l.y, 'fire', 22, 70);
+    const icon = { coin: 'coin', herb: 'sprout', iron: 'iron', dust: 'dust' }[got.kind];
+    for (let i = 0; i < 5; i++) v.coins.push({ t: -i * 0.05, dur: 0.7 + i * 0.05, x0: l.x + (Math.random() - 0.5) * 12, y0: l.y, x: l.x, y: l.y, icon: got.kind === 'coin' && i === 4 ? 'xp' : icon });
+    let what;
+    if (got.kind === 'coin') what = `铜钱 +${ui.num(got.coin)} 阅历 +${ui.num(got.xp)}`;
+    else if (got.kind === 'herb') what = Object.keys(got.herbs).map((k) => `${W_.CROPS[k].name} ×${got.herbs[k]}`).join(' ');
+    else if (got.kind === 'iron') what = `精铁 +${got.iron}`;
+    else what = `星砂 +${got.dust}`;
+    this.bannerQ.unshift('拾得天灯 · ' + what);
+    this.banner = null;
+  }
+  drawLantern() {
+    const l = this.lantern;
+    if (!l) return;
+    const a = art.icon('skylamp');
+    const x = Math.round(l.x - a.w / 2), y = Math.round(l.y - a.h / 2 + Math.sin(l.t * 2.2) * 2);
+    // A soft glow that breathes, so it reads as a light and catches the eye against any sky.
+    const glow = 0.1 + 0.05 * Math.sin(l.t * 5);
+    ui.alpha(glow);
+    ui.rect(x - 5, y - 3, a.w + 10, a.h + 6, '#f7dd7a');
+    ui.rect(x - 2, y - 6, a.w + 4, a.h + 12, '#f7dd7a');
+    ui.alpha(1);
+    ui.img(a, x, y);
+    ui.hit('road-lantern', x - 12, y - 10, a.w + 24, a.h + 20, () => this.catchLantern(), { sound: null });
+  }
+  // The goal in hand: claim it, or be shown what it pays and taken to where it gets done.
+  questTap(c) {
+    const s = store.get();
+    if (c.done) {
+      const got = Quests.claim(s);
+      Idle.nudge(s);
+      store.persist();
+      audio.sfx('coin');
+      audio.buzz('light');
+      this.view.burstAt(W / 2, this.sceneH - 30);
+      const parts = [`铜钱 +${ui.num(got.coin)}`];
+      if (got.dust) parts.push(`星砂 +${got.dust}`);
+      if (got.tickets) parts.push(`星笺 +${got.tickets}`);
+      Object.keys(got.items).forEach((k) => parts.push(`${G.ITEMS[k].name} ×${got.items[k]}`));
+      ui.toast(`${got.n > 1 ? `路引连过 ${got.n} 条` : '路引'}:${parts.join(' ')}`, 1.8);
+      return;
+    }
+    const r = c.reward;
+    const rows = [{ icon: 'quest', label: '进度', value: `${c.have} / ${c.need}`, valueColor: UI.text }, { icon: 'coin', label: '铜钱', value: '+' + ui.num(r.coin) }];
+    if (r.dust) rows.push({ icon: 'dust', label: '星砂', value: '+' + r.dust, valueColor: UI.blue });
+    if (r.tickets) rows.push({ icon: 'letter', label: '星笺', value: '+' + r.tickets, valueColor: UI.gold });
+    Object.keys(r.items).forEach((k) => rows.push({ icon: G.ITEMS[k].icon, label: G.ITEMS[k].name, value: '×' + r.items[k] }));
+    const go = QUEST_GO[c.q.go];
+    const buttons = [{ label: '知道了', kind: 'ghost', sound: 'back' }];
+    if (go && !c.locked) buttons.push({ label: '前往', kind: 'primary', onTap: go });
+    O.modal({
+      title: `路引 ${c.index + 1} / ${c.total}`,
+      text: c.q.text + (c.locked ? '。这一处还没开张,沿着路再走一走。' : go ? '。' : '。队伍正朝那里走,到了会等你。'),
+      rows, buttons,
+    });
+  }
+  // A travel pass is a slip of paper, so this one strip is drawn as paper among the lacquer panels.
+  drawQuest(s, y) {
+    const c = Quests.current(s);
+    const m = 5, w = W - m * 2, h = 23;
+    const done = !!c && c.done;
+    ui.rect(m + 1, y, w - 2, h, UI.ink);
+    ui.rect(m, y + 1, w, h - 2, UI.ink);
+    ui.rect(m + 1, y + 1, w - 2, h - 2, done ? '#f2e9d0' : '#d9c9a3');
+    ui.rect(m + 1, y + 1, w - 2, 1, '#fff8e4');
+    ui.rect(m + 1, y + h - 3, w - 2, 2, '#a8956f');
+    // The red seal every pass carries.
+    ui.rect(m + 5, y + 4, 15, 15, '#8e2a25');
+    ui.rect(m + 6, y + 5, 13, 13, '#c8402f');
+    ui.rect(m + 8, y + 7, 9, 1, '#f2e9d0');
+    ui.rect(m + 8, y + 11, 9, 1, '#f2e9d0');
+    ui.rect(m + 8, y + 15, 9, 1, '#f2e9d0');
+    ui.rect(m + 12, y + 7, 1, 9, '#f2e9d0');
+    if (!c) {
+      ui.text('路引已尽,往后的路自己走', m + 26, y + 5, '#6c3f26');
+      return;
+    }
+    ui.text(c.q.text, m + 26, y + 5, '#241a10');
+    if (done) {
+      ui.button('road-quest', W - m - 50, y + 2, 46, h - 4, { label: '领取', kind: 'primary', badge: true, sound: null, onTap: () => this.questTap(c) });
+      return;
+    }
+    const prog = c.need > 1 ? `${ui.num(c.have)}/${ui.num(c.need)}` : '';
+    ui.text('>', W - m - 8, y + 5, '#8e2a25', { align: 'r' });
+    if (prog) ui.text(prog, W - m - 18, y + 5, '#6c3f26', { align: 'r' });
+    ui.hit('road-quest', m, y, w, h, () => this.questTap(c), { label: 'road-quest' });
+  }
+  // The region's road as a row of stops, with the party's place along it.
+  drawRoute(s, y, st) {
+    if (Idle.lapping(s) || st.kind === 'ending' || !st.node) return;
+    const nodes = this.ch.nodes.filter((n) => n.type !== 'chest');
+    const x0 = 12, x1 = W - 12;
+    const step = (x1 - x0) / (nodes.length - 1);
+    const at = nodes.indexOf(st.node);
+    ui.rect(x0, y + 3, x1 - x0, 3, UI.ink);
+    ui.rect(x0, y + 4, x1 - x0, 1, '#4a4268');
+    const px = at <= 0 ? x0 + step * 0 * st.progress : x0 + step * (at - 1 + st.progress);
+    if (px > x0) ui.rect(x0, y + 4, Math.round(px - x0), 1, '#e8b33a');
+    nodes.forEach((n, i) => {
+      const x = Math.round(x0 + step * i);
+      const done = !!s.progress.cleared[n.id];
+      const big = n.type === 'boss';
+      const r = big ? 4 : 3;
+      const here = i === at;
+      const blink = here && Math.floor(game.t * 2.5) % 2 === 0;
+      const fill = done ? '#e8b33a' : here ? (blink ? '#fff2c8' : n.type === 'boss' ? '#ec7a4e' : '#7fd1a4') : big ? '#8e2a25' : n.type === 'elite' ? '#6b4a94' : n.type === 'event' ? '#2f6db5' : '#3a3350';
+      ui.rect(x - r, y + 4 - r, r * 2 + 1, r * 2 + 1, UI.ink);
+      ui.rect(x - r + 1, y + 5 - r, r * 2 - 1, r * 2 - 1, fill);
+      if (done) ui.rect(x - r + 1, y + 5 - r, r * 2 - 1, 1, '#f7dd7a');
+    });
+    // The party itself, as a small marker riding the line.
+    const mx = Math.round(Math.max(x0, px));
+    ui.rect(mx - 2, y - 5, 5, 5, UI.ink);
+    ui.rect(mx - 1, y - 4, 3, 3, '#f2e9d0');
+    ui.rect(mx, y, 1, 2, UI.ink);
   }
   collect() {
     const s = store.get();
@@ -464,7 +626,7 @@ class Road {
       },
     });
   }
-  drawTop(s) {
+  drawTop(s, st, now) {
     ui.header(this.ch.name, null, s.stardust, s.coin);
     const y = D.contentTop;
     // Stars lit so far, then what the party is worth.
@@ -479,6 +641,22 @@ class Road {
     ui.img(art.icon('power'), W - ui.font.width(power) - 24, y - 3);
     ui.text(power, W - 6, y, UI.gold, { align: 'r', outline: true });
     if (lit < 7 && !Idle.campaignDone(s)) ui.text(`下一颗:${STAR_NAMES[Math.min(s.progress.stars, 6)]}`, 68, y, UI.text, { outline: true });
+    this.drawRoute(s, y + 22, st);
+    // What is helping the party along right now: a meal, and today's walking.
+    const r = Idle.multipliers(s, now);
+    const hours = (secs) => (secs >= 3600 ? Math.ceil(secs / 3600) + '时' : Math.ceil(secs / 60) + '分');
+    let bx = 8;
+    const by = y + 36;
+    if (r.meal) {
+      ui.img(art.icon(r.meal.icon), bx, by - 3);
+      const left = hours(s.idle.mealSecs);
+      ui.text(left, bx + 17, by, UI.peach, { outline: true });
+      bx += 23 + ui.font.width(left);
+    }
+    if (r.stride > 0) {
+      ui.img(art.icon('boot'), bx, by - 3);
+      ui.text(`+${Math.round(r.stride * 100)}%`, bx + 17, by, UI.jade, { outline: true });
+    }
   }
   drawPack(s, y, now) {
     const m = 5, w = W - m * 2, h = 50;
@@ -560,28 +738,29 @@ class Road {
     ui.button('road-boost', m, y, 90, h, {
       icon: 'wing', label: haste > 0 ? ui.dur(haste) : '加快脚步', kind: haste > 0 ? 'jade' : 'normal', alignLeft: true, onTap: () => this.boostSheet(),
     });
+    // What a minute on the road is worth right now, with every bonus counted.
+    const rate = Idle.readout(s, now);
+    const boosted = rate.m.coin > 1.001 || haste > 0;
+    // A narrow phone with large numbers keeps the coins, then the experience, then the unit, as room allows.
+    const edge = W - m - 60;
+    const cw = 17 + ui.font.width(ui.num(rate.coin)) + 5, xw = 17 + ui.font.width(ui.num(rate.xp)) + 2, uw = ui.font.width('/分');
     let x = m + 95;
-    const r = Idle.multipliers(s, now);
-    const hours = (secs) => (secs >= 3600 ? Math.ceil(secs / 3600) + '时' : Math.ceil(secs / 60) + '分');
-    if (r.meal) {
-      ui.img(art.icon(r.meal.icon), x, y + 5);
-      ui.text(hours(s.idle.mealSecs), x + 17, y + 8, UI.peach);
-      x += 19 + ui.font.width(hours(s.idle.mealSecs));
+    ui.iconNum('coin', ui.num(rate.coin), x, y + 8, boosted ? UI.gold : UI.dim);
+    x += cw;
+    if (x + xw <= edge) {
+      ui.iconNum('xp', ui.num(rate.xp), x, y + 8, boosted ? UI.jade : UI.dim);
+      x += xw;
     }
-    if (r.stride > 0) {
-      ui.img(art.icon('boot'), x, y + 5);
-      ui.text(`${Math.round(r.stride * 100)}%`, x + 17, y + 8, UI.jade);
-    } else if (!r.meal) {
-      const rate = Idle.readout(s, now);
-      ui.iconNum('coin', ui.num(rate.coin) + '/分', x, y + 8, UI.dim);
-    }
+    if (x + uw <= edge) ui.text('/分', x, y + 8, UI.faint);
     ui.button('road-map', W - m - 56, y, 56, h, { label: '路程图', kind: 'normal', onTap: () => game.go('map') });
   }
   draw() {
     const s = store.get();
     const now = clock.now();
     this.view.draw(now);
-    this.drawTop(s);
+    const st = Idle.status(s);
+    this.drawLantern();
+    this.drawTop(s, st, now);
     if (this.banner) {
       const tw = ui.font.width(this.banner.text);
       const y = this.sceneH - 26;
@@ -595,10 +774,10 @@ class Road {
     const y0 = this.sceneH;
     ui.rect(0, y0, W, H - y0, '#14121f');
     ui.rect(0, y0, W, 2, UI.line);
-    const st = Idle.status(s);
-    this.drawPack(s, y0 + 4, now);
-    this.drawNode(s, y0 + 57, st);
-    this.drawStrip(s, y0 + 110, now);
+    this.drawQuest(s, y0 + 4);
+    this.drawPack(s, y0 + 29, now);
+    this.drawNode(s, y0 + 82, st);
+    this.drawStrip(s, y0 + 136, now);
     nav.draw('road');
   }
 }

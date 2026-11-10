@@ -280,6 +280,88 @@ async function assertOnScreen(d, where) {
     await d.ctx.close();
   });
 
+  await check('goals: the strip says what to do next, takes the player there, and pays once', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, `s.progress.cleared.c1a = true; s.flags.seen.c1_first_step = 1; s.quest.at = 0;`);
+    await go(d, 'road');
+    await settle(d, 'Road');
+    assert.ok((await d.page.evaluate(() => window.__BUXU__.quests.current(window.__BUXU__.store.get()))).done);
+    await d.tap('road-quest');
+    let s = await d.state();
+    assert.strictEqual(s.quest.at, 1);
+    const paid = s.coin;
+    assert.ok(paid > 0);
+    // The next goal is to empty the pack. Tapping it explains it; it does not pay.
+    await d.tap('road-quest');
+    await d.waitScene('Modal');
+    await d.tap('modal-0');
+    await d.waitScene('Road');
+    assert.strictEqual((await d.state()).coin, paid);
+    await skipTime(d, 20 * 60000);
+    await d.tap('road-collect');
+    await d.page.waitForTimeout(80);
+    await d.tap('road-quest');
+    s = await d.state();
+    assert.strictEqual(s.quest.at, 2);
+    assert.ok(s.coin > paid);
+    // The third asks for training, and its button leads to the party screen.
+    await d.tap('road-quest');
+    await d.waitScene('Modal');
+    await d.tap('modal-1');
+    await d.waitScene('Party');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('sky lanterns: one drifts by, a tap catches it, and the catch waits in the pack', async () => {
+    const d = await open(browser, { speed: 2 });
+    await prepare(d, OPEN_ALL);
+    await go(d, 'road');
+    await settle(d, 'Road');
+    await d.page.evaluate(() => { window.__BUXU__.game.top().lanternIn = 0; });
+    await d.waitFor('road-lantern');
+    const before = await d.state();
+    await d.page.evaluate(() => { const r = window.__BUXU__.game.top(); r.lantern.x = window.__BUXU__.ui.W / 2; });
+    await d.page.waitForTimeout(80);
+    await d.tap('road-lantern');
+    const after = await d.state();
+    assert.strictEqual(after.finds.n, 1);
+    assert.strictEqual(after.coin, before.coin, 'nothing skips the pack');
+    assert.ok(!(await d.has('road-lantern')), 'the lantern is gone once caught');
+    // Once the day's lanterns are caught, no more come.
+    await d.page.evaluate(() => {
+      const B = window.__BUXU__;
+      B.store.get().finds.n = 999;
+      B.game.top().lanternIn = 0;
+    });
+    await d.page.waitForTimeout(400);
+    assert.ok(!(await d.has('road-lantern')));
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
+  await check('station: one tap takes in the harvest, the replies and the relics, and replants', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, `${OPEN_ALL}
+      const now = B.clock.now();
+      s.garden.plots = [{ el: 'wood', at: now - 9e6, doneAt: now - 1000 }, { el: 'earth', at: now - 9e6, doneAt: now - 1000 }];
+      s.furnace.jobs = [{ type: 'earth_wood', rank: 0, doneAt: now - 1000 }];
+    `);
+    await go(d, 'station');
+    await d.waitScene('Station');
+    await d.tap('st-tidy');
+    await d.waitScene('Modal');
+    await d.tap('modal-0');
+    const s = await d.state();
+    assert.ok(s.herbs.wood > 0 && s.herbs.earth > 0);
+    assert.strictEqual(s.relics.length, 1);
+    assert.strictEqual(s.garden.plots[0].el, 'wood');
+    assert.ok(s.daily.done.garden);
+    assert.ok(!(await d.has('st-tidy')), 'with nothing left to take in, the button goes away');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
   await check('altar: walking more pays more, and the same steps never pay twice', async () => {
     const d = await open(browser, { speed: 3 });
     await introToReveal(d);
@@ -1309,6 +1391,28 @@ async function assertOnScreen(d, where) {
         await shot(d, `${name}-${where}`);
       };
       await visit('road', 'road');
+      // The goal strip with its longest wording, waiting and then ready to claim, and with the chain finished.
+      const widest = await d.page.evaluate(() => {
+        const B = window.__BUXU__, Q = B.quests.QUESTS;
+        let at = 0;
+        Q.forEach((q, i) => { if (B.font.width(q.text) > B.font.width(Q[at].text)) at = i; });
+        B.store.get().quest.at = at;
+        return at;
+      });
+      await d.page.waitForTimeout(120);
+      await assertTidy(d, 'road, longest goal');
+      await d.page.evaluate((at) => {
+        const B = window.__BUXU__, s = B.store.get();
+        const q = B.quests.QUESTS[at];
+        B.quests.QUESTS[at] = Object.assign({}, q, { now: () => q.need });
+        s.quest.at = at;
+      }, widest);
+      await d.page.waitForTimeout(120);
+      await assertTidy(d, 'road, goal ready');
+      await d.page.evaluate(() => { const B = window.__BUXU__; B.store.get().quest.at = B.quests.QUESTS.length; });
+      await d.page.waitForTimeout(120);
+      await assertTidy(d, 'road, goals finished');
+      await d.page.evaluate(() => { window.__BUXU__.store.get().garden.plots = [{ el: 'wood', at: 1, doneAt: 2 }]; });
       await visit('station', 'station');
       await visit('party', 'party');
       await visit('skills', 'skills', { hero: 'cen' });

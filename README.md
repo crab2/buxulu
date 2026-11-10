@@ -23,8 +23,22 @@ All code, art, story and music are original. Art is drawn in code, and music is 
 | **云游 Wander** | A dice walk around a 24-stop board with a prize at every stop. Free rolls return with time, and steps add more. | Rolls refill |
 | **日课 Daily errands** | A short checklist that pays Stardust for playing. | Resets daily |
 | **衣橱 Wardrobe** | Outfits, companions that walk with the party, and station decorations. Looks only. | — |
+| **路引 Goals** | One goal at a time on the road screen, 43 in all. It says what is worth doing next, takes you to the screen that does it, and pays a little when it is done. | — |
+| **天灯 Sky lanterns** | A lantern drifts over the road now and then while you watch. Tap it for a small windfall. Up to 16 a day. | No, they are for whoever is looking |
+| **一键打理 One-tap station** | One button at the station takes in every finished errand, ripe crop and refined relic, and sows the picked plots again with the same crop. | — |
 
 Features open gradually along the road, so the first session is just the march and a couple of fights. After the story ends, the road keeps looping with stronger enemies.
+
+### Goals, lanterns and the things that make the main screen worth watching
+
+- **路引** is a paper strip above the pack. Each goal reads the save as it is, so anything already done counts, and a save from before goals existed catches up in one tap. A goal pays coins sized by the point on the road it belongs to (4 to 20 minutes of income there), and a few pay Stardust, supplies or star letters. All 43 together come to under 9 hours of road income, so the chain guides and does not carry. No goal costs Stardust or looks at real steps, and a test fails if one starts to. The list is `QUESTS` in `js/systems/quests.js`.
+- **天灯** come every 50 to 90 seconds while the road screen is open. One holds two minutes of coins and experience at the current rate, or sometimes two herbs, three iron or five Stardust. The catch goes into the pack. A full day of them is worth about half an hour on the road.
+- **The route row** under the header shows the region's stops as a line of pips, with the party's place along it, so "how far to the boss" can be read at a glance.
+- **Income per minute**, coins and experience, is always shown beside 加快脚步, with every bonus counted. A meal and today's walking bonus show as small markers under the route row.
+- **战力 +N** rises under the header on any screen whenever the party's rating goes up, whatever caused it.
+- **The road tab** shows a dot when a goal is ready to claim.
+
+The balance simulation does not claim goals or catch lanterns, so the published days are for a player who ignores both.
 
 ## Run it
 
@@ -261,6 +275,11 @@ There are no image files. Every sprite and backdrop is authored in code and bake
 - The station is a diorama whose garden, disc and decorations show your real state. The road tints with the real time of day.
 - Portraits redrawn, the tiger and the ram rebuilt, new icons, and new interface chrome.
 
+**Polish pass (this version)**
+- The station's lawn is three calm tones with wandering edges instead of an even speckle. Buildings cast shade, doors and lamps spill warm light, and there is a gate, a well, bamboo, flower beds, fireflies and glints on the pond.
+- Screens of lists (errands, garden, trials, star letters, shop, furnace, letters, wardrobe) sit on scenery that sinks into ink through an ordered dither, where they used to end on a blurred stretch of ground.
+- The goal strip is drawn as paper with a red seal, the one light surface among the lacquer panels, so the next thing to do is the first thing the eye finds.
+
 **Lighter on the phone** (measured across a tour of every screen and region by `npm run e2e`):
 
 | | Turn-based version | Now |
@@ -307,7 +326,8 @@ js/art/               All sprites and scenery, drawn in code
 js/data/              Skills, monsters, relics, chapters, story script, activity content (world.js),
                       equipment, sets and draw odds (gear.js)
 js/systems/           Rules: idle march, battle, economy, boosts, skill levels, equipment, draw, dispatch, garden,
-                      tower, wander, daily, wardrobe, ledger, steps client, save
+                      tower, wander, daily, goals (quests), sky lanterns (finds), one-tap station (chores),
+                      wardrobe, ledger, steps client, save
 js/scenes/            Screens
 cloudfunctions/       stepExchange and cloudSave
 assets/audio/         Generated MP3s (1.2 MB)

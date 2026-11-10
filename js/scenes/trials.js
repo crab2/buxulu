@@ -55,10 +55,7 @@ class Trials {
     const s = store.get();
     const now = clock.now();
     const day = Idle.dayOf(now);
-    ui.img(art.battleBg('autumn', W, H), 0, 0);
-    ui.alpha(0.58);
-    ui.rect(0, 0, W, H, '#07061a');
-    ui.alpha(1);
+    ui.backdrop('autumn', 0.58);
     const top = D.contentTop;
     ui.setClip(0, top, W, this.bottom - top);
     let y = top - Math.round(this.scroll);
@@ -315,10 +312,7 @@ class WanderScene {
   draw() {
     const s = store.get();
     const now = clock.now();
-    ui.img(art.battleBg('spring', W, H), 0, 0);
-    ui.alpha(0.3);
-    ui.rect(0, 0, W, H, '#07061a');
-    ui.alpha(1);
+    ui.backdrop('spring', 0.3);
     const top = D.contentTop + 2;
     const size = Math.floor(Math.min((W - 10) / COLS, (H - top - D.safeBottom - 6) / ROWS));
     const bx = Math.round((W - size * COLS) / 2), by = top;

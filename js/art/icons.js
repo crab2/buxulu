@@ -339,6 +339,21 @@ const ICONS = {
     g.rect(7, 14, 2, 2, C.gold);
     return g.outline();
   },
+  // A paper sky lantern, lit from inside. Taller than the other icons: it is a thing in the scene.
+  skylamp() {
+    const g = new Grid(14, 20);
+    g.poly([[3, 1], [10, 1], [12, 5], [12, 11], [10, 15], [3, 15], [1, 11], [1, 5]], C.red3);
+    g.poly([[4, 2], [9, 2], [11, 6], [11, 10], [9, 14], [4, 14], [2, 10], [2, 6]], C.gold);
+    g.ell(6, 9, 3, 4, C.gold2);
+    g.ell(6, 10, 1, 2, C.white);
+    g.rect(3, 1, 8, 1, C.red);
+    g.rect(1, 5, 1, 7, C.red);
+    g.rect(12, 5, 1, 7, C.red);
+    g.rect(4, 15, 6, 1, C.ochre2);
+    g.rect(6, 16, 2, 2, C.gold2);
+    g.set(6, 18, C.red3);
+    return g.outline();
+  },
 };
 
 // Herbs from the garden, one for each element, and the dishes cooked from them.

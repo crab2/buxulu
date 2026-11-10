@@ -253,6 +253,74 @@ function bush(g, x, y, r) {
   for (let i = 0; i < r; i++) g.set(x + (hash(i, x, 2) - 0.5) * r * 1.4, y + (hash(i, y, 3) - 0.5) * r * 0.8, hash(i, 1, 4) > 0.6 ? C.peach2 : 0x4a7a5a);
 }
 
+// Blends a soft-edged oval of colour into what is already painted: shade under a building, or lamplight.
+function wash(g, cx, cy, rx, ry, col, k, minY) {
+  for (let y = Math.max(minY, Math.round(cy - ry)); y <= cy + ry; y++) {
+    for (let x = Math.round(cx - rx); x <= cx + rx; x++) {
+      const d = ((x - cx) / rx) * ((x - cx) / rx) + ((y - cy) / ry) * ((y - cy) / ry);
+      if (d > 1) continue;
+      const c = g.get(x, y);
+      if (!c) continue;
+      // Two flat steps rather than a gradient, with a checkered rim, to stay in keeping with the rest.
+      const amt = d < 0.45 ? k : d < 0.8 || ((x + y) & 1) ? k * 0.5 : 0;
+      if (amt) g.set(x, y, mix(c, col, amt));
+    }
+  }
+}
+
+function bamboo(g, x, y, s) {
+  [[0, 1], [5, 0.8], [-4, 0.7], [9, 0.55]].forEach((q, i) => {
+    const bx = x + q[0], top = y - s * q[1];
+    g.line(bx, y, bx + (i % 2 ? 1 : -1), top, 0x4a8a5a, 1);
+    for (let yy = y - 5; yy > top; yy -= 6) g.set(bx, yy, 0x2a5a40);
+    for (let j = 0; j < 5; j++) {
+      const ly = top + j * s * 0.13 * q[1], dir = j % 2 ? 1 : -1;
+      g.line(bx, ly + 2, bx + dir * 6, ly - 1, 0x3f7a50, 1);
+      g.line(bx, ly + 3, bx + dir * 5, ly + 4, 0x5a9a62, 1);
+    }
+  });
+}
+
+function well(g, x, y) {
+  g.ell(x, y, 9, 4, 0x54525e);
+  g.rect(x - 9, y - 7, 18, 7, 0x7c7a88);
+  g.rect(x - 9, y - 7, 18, 1, 0xa09eac);
+  for (let i = -6; i < 9; i += 5) g.rect(x + i, y - 6, 1, 6, 0x54525e);
+  g.ell(x, y - 7, 8, 3, 0x54525e);
+  g.ell(x, y - 7, 6, 2, 0x1a2a44);
+  g.set(x - 2, y - 7, 0x7cb8d8);
+  g.rect(x - 10, y - 20, 2, 14, 0x4a2c28);
+  g.rect(x + 8, y - 20, 2, 14, 0x4a2c28);
+  g.poly([[x - 13, y - 19], [x + 13, y - 19], [x + 8, y - 24], [x - 8, y - 24]], 0x4a3a44);
+  g.rect(x - 13, y - 19, 26, 1, 0x6c5a64);
+  g.rect(x, y - 19, 1, 8, C.paper3);
+  g.rect(x - 1, y - 12, 3, 3, 0x6c3f26);
+}
+
+// The gate at the foot of the picture, where the road comes in, with a low wall running off both ways.
+function gate(g, x, y) {
+  const wall = 0x6c6a78, cap = 0x9a98a8;
+  for (let side = -1; side <= 1; side += 2) {
+    const x0 = side < 0 ? 0 : x + 17, x1 = side < 0 ? x - 17 : g.w;
+    g.rect(x0, y - 7, x1 - x0, 8, wall);
+    g.rect(x0, y - 8, x1 - x0, 2, cap);
+    g.rect(x0, y - 2, x1 - x0, 1, drk(wall, 0.3));
+    for (let i = x0 + 4; i < x1; i += 9) g.rect(i, y - 6, 1, 4, drk(wall, 0.25));
+  }
+  [-16, 13].forEach((dx) => {
+    g.rect(x + dx, y - 26, 4, 28, C.red2);
+    g.rect(x + dx, y - 26, 1, 28, C.red);
+  });
+  g.poly([[x - 25, y - 24], [x + 26, y - 24], [x + 18, y - 31], [x - 17, y - 31]], 0x31455f);
+  g.rect(x - 25, y - 24, 51, 1, 0x56708c);
+  g.rect(x - 14, y - 22, 29, 2, 0x4a2c28);
+  [-12, 12].forEach((dx) => {
+    g.rect(x + dx, y - 20, 1, 3, C.ink);
+    g.rect(x + dx - 2, y - 17, 5, 5, C.red);
+    g.rect(x + dx - 1, y - 16, 3, 3, C.gold2);
+  });
+}
+
 function hubScene(w, h) {
   const L = stationLayout(w, h);
   const { gy } = L;
@@ -279,18 +347,19 @@ function hubScene(w, h) {
   };
   ridge(gy, 40, 0.019, 1, 0x2c2a5a, 0x4a4078);
   ridge(gy + 1, 22, 0.035, 4, 0x1f1d42, 0x34315f);
-  // Ground, lightening toward the bottom with a soft dither.
-  const a0 = 0x2f4240, a1 = 0x46603f;
-  const patch = 0x54703f;
+  // Ground: three broad tones of evening grass with wandering edges, rather than an even speckle, so the
+  // eye reads lawn and shade and not noise.
+  const tones = [0x2b3f3c, 0x35503f, 0x426040];
   for (let y = gy; y < h; y++) {
     const t = (y - gy) / (h - gy);
     for (let x = 0; x < w; x++) {
-      let c = t > (B[(y & 3) * 4 + (x & 3)] + 0.5) / 16 ? a1 : a0;
-      // Soft drifts of lighter grass, so the ground has shapes in it rather than even noise.
-      const drift = fbm1(x * 0.035 + y * 0.012, 3, 3) + fbm1(y * 0.06 - x * 0.015, 9, 3);
-      if (drift > 1.08) c = mix(c, patch, t * 0.8 + 0.2);
-      const v = hash(x >> 1, y >> 1, 3);
-      g.set(x, y, v > 0.95 ? drk(c, 0.2) : v < 0.04 ? lit(c, 0.14) : c);
+      const drift = fbm1(x * 0.022 + y * 0.009, 3, 3) * 0.55 + fbm1(y * 0.03 - x * 0.012, 9, 3) * 0.45;
+      const v = t * 0.9 + (drift - 0.5) * 0.9;
+      let c = v < 0.3 ? tones[0] : v < 0.68 ? tones[1] : tones[2];
+      // One checkered row where two tones meet softens the join without filling the lawn with dots.
+      const edge = Math.min(Math.abs(v - 0.3), Math.abs(v - 0.68));
+      if (edge < 0.035 && ((x + y) & 1)) c = v < 0.5 ? (v < 0.3 ? tones[1] : tones[0]) : (v < 0.68 ? tones[2] : tones[1]);
+      g.set(x, y, c);
     }
   }
   g.rect(0, gy, w, 1, 0x64786a);
@@ -320,6 +389,12 @@ function hubScene(w, h) {
   lay(L.furnace.x + 20, L.furnace.y + 2, hallX, L.furnace.y + 2, 10);
   lay(hallX, L.shop.y + 2, L.shop.x - 24, L.shop.y + 2, 10);
   lay(hallX + 10, L.hall.y + 8, L.altar.x, L.altar.y + 2, 8);
+  // Shade under everything that stands on the lawn, and warm light spilling from doors and lamps.
+  [[L.hall.x, L.hall.y + 4, 62, 7], [L.furnace.x, L.furnace.y + 2, 34, 5], [L.stable.x, L.stable.y + 1, 40, 5], [L.shop.x, L.shop.y + 2, 32, 5],
+    [L.altar.x, L.altar.y + 1, 24, 4], [L.mail.x, L.mail.y + 1, 8, 2]].forEach((q) => wash(g, q[0], q[1], q[2], q[3], 0x141a2c, 0.45, gy));
+  wash(g, hallX, L.hall.y + 16, 22, 12, 0xf0b458, 0.3, gy);
+  wash(g, hallX, L.furnace.y - 6, 30, 9, 0xf0c070, 0.2, gy);
+  wash(g, L.furnace.x, L.furnace.y + 6, 16, 5, 0xec7a4e, 0.22, gy);
   // Trees frame the scene, back to front.
   pine(g, Math.round(w * 0.06), gy + 28, 44, 0x1f4a44, 0x173a38);
   pine(g, Math.round(w * 0.15), gy + 22, 34, 0x1f4a44, 0x173a38);
@@ -340,12 +415,40 @@ function hubScene(w, h) {
   bush(g, Math.round(w * 0.62), h - 18, 10);
   bush(g, Math.round(w * 0.74), h - 8, 14);
   bush(g, Math.round(w * 0.04), Math.round(L.garden.y - 14), 8);
-  // Tufts and pebbles, kept off the paths by being sparse and small.
-  for (let i = 0; i < 90; i++) {
-    const x = hash(i, 7, 7) * w, y = gy + 6 + hash(i, 8, 7) * (h - gy - 8);
-    if (Math.abs(x - hallX) < 12) continue;
-    g.set(x, y, 0x5a7050);
-    g.set(x, y - 1, 0x6a8460);
+  // Bamboo by the garden, a well by the stable and a gate where the road comes in.
+  bamboo(g, Math.round(w * 0.03), Math.round(L.garden.y + L.garden.cell * 3 + 74), 46);
+  bamboo(g, Math.round(w * 0.1), Math.round(L.garden.y + L.garden.cell * 3 + 80), 36);
+  well(g, Math.round(w * 0.62), Math.round(L.stable.y + 52));
+  gate(g, hallX, h - 4);
+  // Flower beds either side of the hall steps.
+  [-1, 1].forEach((k) => {
+    for (let i = 0; i < 9; i++) {
+      const fx = hallX + k * (30 + i * 3), fy = L.hall.y + 9 + (i % 2);
+      g.rect(fx, fy, 2, 2, 0x35604a);
+      if (i % 2 === 0) g.set(fx, fy - 1, [C.peach2, C.gold2, C.red3][i % 3]);
+    }
+  });
+  // Grass in tufts and small drifts of flowers, kept off the paths.
+  const onPath = (x, y) => {
+    const c = g.get(Math.round(x), Math.round(y));
+    return tones.indexOf(c) < 0;
+  };
+  for (let i = 0; i < 70; i++) {
+    const x = 3 + hash(i, 7, 7) * (w - 6), y = gy + 8 + hash(i, 8, 7) * (h - gy - 12);
+    if (onPath(x, y) || onPath(x - 2, y) || onPath(x + 2, y)) continue;
+    const c = g.get(Math.round(x), Math.round(y));
+    g.set(x - 1, y, lit(c, 0.16));
+    g.set(x, y - 1, lit(c, 0.22));
+    g.set(x + 1, y, lit(c, 0.12));
+    g.set(x, y, drk(c, 0.12));
+  }
+  for (let k = 0; k < 7; k++) {
+    const cx0 = 10 + hash(k, 3, 11) * (w - 20), cy0 = gy + 20 + hash(k, 4, 11) * (h - gy - 40);
+    const col = [C.peach2, C.gold2, C.paper, C.blue3][k % 4];
+    for (let i = 0; i < 6; i++) {
+      const x = cx0 + (hash(i, k, 12) - 0.5) * 22, y = cy0 + (hash(i, k, 13) - 0.5) * 10;
+      if (!onPath(x, y)) g.set(x, y, col);
+    }
   }
   return g;
 }
