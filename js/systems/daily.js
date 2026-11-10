@@ -2,6 +2,7 @@
 // The step errand is an extra on top, so skipping it never costs the day's bonus.
 const W = require('../data/world.js');
 const E = require('./economy.js');
+const Quests = require('./quests.js');
 
 function ensure(s, day) {
   const d = s.daily;
@@ -15,8 +16,10 @@ function ensure(s, day) {
   return d;
 }
 
+// Also counted for good, because the goal chain (systems/quests.js) asks for some of these by number.
 function mark(s, id, day) {
   ensure(s, day).done[id] = true;
+  Quests.note(s, id);
 }
 
 function claim(s, id, day) {

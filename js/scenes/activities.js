@@ -63,10 +63,7 @@ class DispatchScene extends Scroller {
   draw() {
     const s = store.get();
     const now = clock.now();
-    ui.img(art.battleBg('loess', W, H), 0, 0);
-    ui.alpha(0.6);
-    ui.rect(0, 0, W, H, '#07061a');
-    ui.alpha(1);
+    ui.backdrop('loess', 0.6);
     const top = D.contentTop;
     const bottom = H - D.safeBottom;
     ui.setClip(0, top, W, bottom - top);
@@ -323,10 +320,7 @@ class GardenScene extends Scroller {
   draw() {
     const s = store.get();
     const now = clock.now();
-    ui.img(art.battleBg('spring', W, H), 0, 0);
-    ui.alpha(0.42);
-    ui.rect(0, 0, W, H, '#07061a');
-    ui.alpha(1);
+    ui.backdrop('spring', 0.42);
     const top = D.contentTop;
     const bottom = H - D.safeBottom;
     const tw = Math.floor((W - 20) / 2);
@@ -401,10 +395,7 @@ class Letters extends Scroller {
   }
   draw() {
     const s = store.get();
-    ui.img(art.battleBg('autumn', W, H), 0, 0);
-    ui.alpha(0.6);
-    ui.rect(0, 0, W, H, '#07061a');
-    ui.alpha(1);
+    ui.backdrop('autumn', 0.6);
     const top = D.contentTop, bottom = H - D.safeBottom;
     ui.setClip(0, top, W, bottom - top);
     let y = top - Math.round(this.scroll);

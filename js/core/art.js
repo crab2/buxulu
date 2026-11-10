@@ -180,6 +180,16 @@ module.exports = {
 
   battleBg: (theme, w, h) => baked(`bb:${theme}:${w}:${h}`, () => scenery.battleBg(theme, w, h)),
   mapBg: (theme, w, h, path, key) => baked(`mb:${key}:${w}:${h}`, () => scenery.mapBg(theme, w, h, path)),
+  // Ink that thickens downward in an ordered dither, laid over a backdrop so lists end on calm darkness.
+  scrim: (h) => baked(`scrim:${h}`, () => {
+    const B = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+    const g = new Grid(64, h);
+    for (let y = 0; y < h; y++) {
+      const t = Math.min(1, (y / h) * 1.5);
+      for (let x = 0; x < 64; x++) if (t > (B[(y & 3) * 4 + (x & 3)] + 0.5) / 16) g.set(x, y, 0x0d0c1c);
+    }
+    return g;
+  }),
   hub: (w, h) => baked(`hub:${w}:${h}`, () => station.hubScene(w, h)),
   stationLayout: station.stationLayout,
 

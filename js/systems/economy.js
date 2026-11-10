@@ -44,6 +44,8 @@ function defaultSave() {
     blessings: { pack: 0, stride: 0, fortune: 0 },
     wardrobe: { owned: {}, pet: null, decor: {} },
     letters: { got: [], unread: 0 },
+    quest: { at: 0, count: {} },
+    finds: { day: 0, n: 0 },
   };
 }
 

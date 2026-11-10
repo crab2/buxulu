@@ -12,6 +12,9 @@ const G = require('../data/game.js');
 const W_ = require('../data/world.js');
 const Dispatch = require('../systems/dispatch.js');
 const Garden = require('../systems/garden.js');
+const Chores = require('../systems/chores.js');
+const Daily = require('../systems/daily.js');
+const Idle = require('../systems/idle.js');
 const steps = require('../systems/steps.js');
 const O = require('./overlays.js');
 const nav = require('./nav.js');
@@ -41,7 +44,45 @@ class Station {
       this.fx.add({ x: f.x + (Math.random() - 0.5) * 8, y: f.y - 30, vx: 3 + Math.random() * 3, vy: -9, life: 2.2, c: Math.random() > 0.3 ? '#6a6088' : '#ec7a4e', s: 2 });
       const a = this.L.altar;
       this.fx.add({ x: a.x + (Math.random() - 0.5) * 18, y: a.y - 22, vx: 0, vy: -10 - Math.random() * 7, life: 1.1, c: Math.random() > 0.5 ? '#f7dd7a' : '#6fb0e0', s: 1 });
+      // Fireflies over the lawn, and a glint now and then on the pond.
+      this.fx.add({ x: Math.random() * W, y: this.L.gy + 40 + Math.random() * (this.h - this.L.gy - 60), vx: (Math.random() - 0.5) * 10, vy: -3 - Math.random() * 4, wob: 5, life: 1.6 + Math.random(), max: 2.6, c: '#d8e87a', s: 1 });
+      const p = this.L.pond;
+      if (Math.random() < 0.5) this.fx.add({ x: p.x + (Math.random() - 0.5) * 30, y: p.y + (Math.random() - 0.5) * 8, vx: 4, vy: 0, life: 0.5, c: '#bfe6f2', s: 1 });
     }
+  }
+  // Takes in everything that has finished around the station, and sows the picked plots again.
+  tidy() {
+    const s = store.get();
+    const now = clock.now();
+    const r = Chores.tidy(s, now);
+    if (!r.n) return;
+    const day = Idle.dayOf(now);
+    if (r.crops) Daily.mark(s, 'garden', day);
+    Idle.nudge(s);
+    store.persist();
+    audio.sfx('coin');
+    audio.buzz('light');
+    const rows = [];
+    if (r.mail) {
+      rows.push({ icon: 'letter', label: '回信', value: `${r.mail.n} 封`, valueColor: UI.text });
+      rows.push({ icon: 'coin', label: '铜钱', value: '+' + ui.num(r.mail.coin) });
+      rows.push({ icon: 'xp', label: '阅历', value: '+' + ui.num(r.mail.xp), valueColor: UI.jade });
+      if (r.mail.dust) rows.push({ icon: 'dust', label: '星砂', value: '+' + r.mail.dust, valueColor: UI.blue });
+    }
+    const herbs = Object.assign({}, r.herbs);
+    if (r.mail) Object.keys(r.mail.herbs).forEach((k) => { herbs[k] = (herbs[k] || 0) + r.mail.herbs[k]; });
+    Object.keys(herbs).forEach((k) => rows.push({ icon: 'herb_' + k, label: W_.CROPS[k].name, value: '×' + herbs[k], valueColor: G.ELEMENTS[k].css }));
+    if (r.mail) {
+      Object.keys(r.mail.items).forEach((k) => rows.push({ icon: G.ITEMS[k].icon, label: G.ITEMS[k].name, value: '×' + r.mail.items[k] }));
+      if (r.mail.spirits.length) rows.push({ icon: 'spirit', label: '妖灵', value: '×' + r.mail.spirits.length, valueColor: UI.violet });
+      r.mail.letters.forEach((l) => rows.push({ icon: 'letter', label: '有你的信:' + W_.LETTERS[l].from, color: UI.peach }));
+    }
+    r.relics.forEach((it) => rows.push({ icon: 'furnace', label: `${G.RANKS[it.rank].name}品 ${G.RELICS[it.type].name}`, color: G.RANKS[it.rank].css }));
+    O.modal({
+      title: '驿站打理好了',
+      text: r.resown ? `收过的 ${r.resown} 块地照原样又种上了。` : '',
+      rows, buttons: [{ label: '收下', kind: 'primary' }],
+    });
   }
   plaque(id, label, x, y, hitBox, o) {
     o = o || {};
@@ -132,6 +173,8 @@ class Station {
     if (E.unlocked(s, 'gacha')) {
       this.plaque('st-gacha', '星笺', lx, ly + 18, [lx - 22, ly - 4, 44, 38], { badge: s.gacha.tickets > 0, onTap: () => game.go('gacha', { from: 'station' }) });
     }
+    const chores = Chores.pending(s, now);
+    if (chores) ui.button('st-tidy', W - 99, this.h - 30, 94, 26, { icon: 'bag', label: `一键打理 ${chores}`, kind: 'primary', badge: true, sound: null, onTap: () => this.tidy() });
     ui.button('st-settings', 5, this.h - 26, 40, 22, { label: '设置', kind: 'ghost', onTap: () => game.push('settings') });
     nav.draw('station');
   }
@@ -140,10 +183,7 @@ class Station {
 class Shop {
   draw() {
     const s = store.get();
-    ui.img(art.battleBg('loess', W, H), 0, 0);
-    ui.alpha(0.5);
-    ui.rect(0, 0, W, H, '#000000');
-    ui.alpha(1);
+    ui.backdrop('loess', 0.5);
     let y = D.contentTop + 2;
     ui.panel(8, y, W - 16, 34, { fill: '#2a1a28' });
     ui.text('老驿丞:路上攒的铜钱,花着才踏实。', W / 2, y + 11, UI.peach, { align: 'c' });

@@ -431,10 +431,7 @@ class Furnace {
   }
   draw() {
     const s = store.get();
-    ui.img(art.battleBg('summer', W, H), 0, 0);
-    ui.alpha(0.6);
-    ui.rect(0, 0, W, H, '#07061a');
-    ui.alpha(1);
+    ui.backdrop('summer', 0.6);
     const top = D.contentTop;
     const tw = Math.floor((W - 20) / 2);
     ui.button('tab-refine', 8, top, tw, 24, { label: '炼制', kind: this.tab === 'refine' ? 'primary' : 'normal', onTap: () => { this.tab = 'refine'; this.scroll = 0; } });

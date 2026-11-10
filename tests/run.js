@@ -2860,6 +2860,164 @@ test('every skill in the game has an animation signature', () => {
   assert.ok(/\bshieldHit\(/.test(src), 'protective skills have their own');
 });
 
+// ---- Goals, lanterns and the one-tap station ----
+const Quests = require('../js/systems/quests.js');
+const Finds = require('../js/systems/finds.js');
+const Chores = require('../js/systems/chores.js');
+
+test('goals come one at a time, pay once, and the first is the first fight', () => {
+  const s = E.defaultSave();
+  let c = Quests.current(s);
+  assert.strictEqual(c.index, 0);
+  assert.strictEqual(c.done, false);
+  assert.strictEqual(Quests.claim(s).n, 0, 'nothing to claim yet');
+  assert.strictEqual(s.coin, 0);
+  E.clearNode(s, 'c1a');
+  c = Quests.current(s);
+  assert.ok(c.done);
+  const got = Quests.claim(s);
+  assert.strictEqual(got.n, 1);
+  assert.strictEqual(s.coin, got.coin);
+  assert.ok(got.coin > 0);
+  assert.strictEqual(Quests.current(s).index, 1);
+  assert.strictEqual(Quests.claim(s).n, 0, 'the next goal is not met, so a second tap pays nothing');
+  assert.strictEqual(s.coin, got.coin);
+});
+
+test('goals count what the player does through the same marks as the daily errands', () => {
+  const s = E.defaultSave();
+  E.clearNode(s, 'c1a');
+  Quests.claim(s);
+  assert.strictEqual(Quests.current(s).q.id, 'collect');
+  Daily.mark(s, 'collect', TODAY);
+  assert.ok(Quests.current(s).done);
+  // The count is for good: a new day clears the errand but not the goal's memory of it.
+  Daily.ensure(s, TODAY + 1);
+  assert.strictEqual(s.quest.count.collect, 1);
+});
+
+test('a save from before goals existed catches up in one tap, at the old prices', () => {
+  const s = E.defaultSave();
+  delete s.quest;
+  delete s.finds;
+  const up = E.upgrade(JSON.parse(JSON.stringify(s)));
+  assert.deepStrictEqual(up.quest, { at: 0, count: {} });
+  clearUpToRaw(up, 'c2b');
+  strongParty(up, 20, 10);
+  up.quest.count = { collect: 5, dispatch: 2, gear: 5, garden: 4, wander: 5 };
+  up.relicSeq = 1;
+  up.gacha.total = 20;
+  up.heroes.cen.skillLv = { cut: 3 };
+  const got = Quests.claim(up);
+  assert.ok(got.n >= 8, `only ${got.n} goals caught up`);
+  // Catching up pays what each goal paid at its own point on the road, not at today's richer rates.
+  let expect = 0;
+  for (let i = 0; i < got.n; i++) expect += Quests.reward(Quests.QUESTS[i]).coin;
+  assert.strictEqual(got.coin, expect);
+  assert.ok(!Quests.current(up).done, 'it stops at the first goal not yet met');
+});
+
+test('every goal can be met without Stardust or steps, in an order the road allows', () => {
+  const src = fs.readFileSync(path.join(ROOT, 'js/systems/quests.js'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/steps|spendDust|stardust/.test(src), 'goals never look at steps or charge Stardust');
+  const ids = new Set();
+  let lastLv = 0;
+  Quests.QUESTS.forEach((q) => {
+    assert.ok(!ids.has(q.id), q.id);
+    ids.add(q.id);
+    assert.ok(q.lv >= lastLv, `${q.id} is out of order`);
+    lastLv = q.lv;
+    assert.ok(q.need >= 1 && q.mins > 0 && q.text, q.id);
+    if (q.open) {
+      // A goal never asks for a feature before the road has opened it.
+      const opens = NODE_INDEX[W.UNLOCKS[q.open].node].node;
+      assert.ok(q.lv >= (opens.lv || 0), `${q.id} comes before ${q.open} opens`);
+    }
+    Object.keys(q.items || {}).forEach((k) => assert.ok(G.ITEMS[k], k));
+    const r = Quests.reward(q);
+    assert.ok(r.coin > 0 && r.coin <= G.coinPerMin(q.lv) * 21, `${q.id} pays ${r.coin}`);
+  });
+  // All of it together is worth less than half a day on the road, so the chain guides and does not carry.
+  const mins = Quests.QUESTS.reduce((n, q) => n + q.mins, 0);
+  assert.ok(mins < 12 * 60, `${mins} minutes of income in all`);
+  // A fresh save reads every goal without error, and none is met by doing nothing.
+  const s = E.defaultSave();
+  Quests.QUESTS.forEach((q, i) => {
+    s.quest.at = i;
+    const c = Quests.current(s);
+    assert.strictEqual(c.done, false, `${q.id} is met on a new save`);
+  });
+  s.quest.at = Quests.QUESTS.length;
+  assert.strictEqual(Quests.current(s), null);
+  assert.strictEqual(Quests.claim(s).n, 0);
+});
+
+test('a finished game has met every goal up to the ending', () => {
+  const { run, PROFILES } = require('./simulate.js');
+  const r = run(77, PROFILES.typical);
+  Quests.ensure(r.s);
+  // The simulated player does not mark errands, so stand in for the things it certainly did.
+  r.s.quest.count = { collect: 99, dispatch: 99, gear: 99, garden: 99, wander: 99 };
+  Quests.claim(r.s);
+  const c = Quests.current(r.s);
+  const at = c ? c.index : Quests.QUESTS.length;
+  assert.ok(at >= 20, `the chain stopped at goal ${at}: ${c && c.q.text}`);
+});
+
+test('sky lanterns pay into the pack, a fixed number a day, and never Stardust in bulk', () => {
+  const s = E.defaultSave();
+  const now = NOW * 1000;
+  const rng = seeded(5);
+  let n = 0, dust = 0;
+  for (let i = 0; i < 40; i++) {
+    const got = Finds.claim(s, now, rng);
+    if (!got) break;
+    n++;
+    dust += got.dust || 0;
+  }
+  assert.strictEqual(n, Finds.PER_DAY);
+  assert.strictEqual(Finds.left(s, Idle.dayOf(now)), 0);
+  assert.ok(s.idle.pack.coin > 0 && s.idle.pack.xp > 0);
+  assert.strictEqual(s.coin, 0, 'it waits in the pack like everything else from the road');
+  assert.ok(dust <= Finds.PER_DAY * 5);
+  // A day of lanterns is worth well under an hour of the road.
+  assert.ok(s.idle.pack.coin <= G.coinPerMin(1) * Finds.MINS * Finds.PER_DAY + 1);
+  assert.strictEqual(Finds.left(s, Idle.dayOf(now) + 1), Finds.PER_DAY, 'and there are more tomorrow');
+  // Iron only once equipment exists.
+  assert.strictEqual(Math.floor(s.idle.pack.iron || 0), 0);
+});
+
+test('one tap at the station collects everything finished, and sows the picked plots again', () => {
+  const s = E.defaultSave();
+  clearUpTo(s, 'c1h');
+  const now = NOW * 1000;
+  assert.strictEqual(Chores.pending(s, now), 0);
+  assert.strictEqual(Chores.tidy(s, now).n, 0);
+  Garden.plant(s, 0, 'wood', now);
+  Garden.plant(s, 1, 'fire', now);
+  Dispatch.refill(s, now, seeded(3));
+  const job = s.dispatch.board[0];
+  assert.ok(Dispatch.send(s, job.id, Dispatch.roster(s)[0].id, now));
+  s.spirits = { vine: 2 };
+  s.coin = 1e6;
+  assert.ok(E.startRefine(s, 'vine', 'vine', now));
+  const later = now + 9 * 3600000;
+  assert.strictEqual(Chores.pending(s, later), 4);
+  const coin = s.coin;
+  const r = Chores.tidy(s, later, seeded(4));
+  assert.strictEqual(r.n, 4);
+  assert.strictEqual(r.crops, 2);
+  assert.strictEqual(r.resown, 2);
+  assert.strictEqual(r.relics.length, 1);
+  assert.ok(s.coin > coin, 'the reply paid');
+  assert.ok(s.herbs.wood > 0 && s.herbs.fire > 0);
+  assert.strictEqual(s.garden.plots[0].el, 'wood', 'the same crop is growing again');
+  assert.ok(s.garden.plots[0].doneAt > later);
+  assert.strictEqual(s.relics.length, 1);
+  assert.strictEqual(Chores.pending(s, later), 0);
+  assert.strictEqual(Chores.tidy(s, later).n, 0, 'a second tap finds nothing');
+});
+
 // ---- Runner ----
 (async () => {
   let failed = 0;

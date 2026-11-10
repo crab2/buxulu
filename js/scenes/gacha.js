@@ -89,10 +89,7 @@ class GachaScene {
     const g = s.gacha;
     const day = Idle.dayOf(clock.now());
     Gacha.ensureDay(s, day);
-    ui.img(art.battleBg('void', W, H), 0, 0);
-    ui.alpha(0.62);
-    ui.rect(0, 0, W, H, '#07061a');
-    ui.alpha(1);
+    ui.backdrop('void', 0.62);
     const m = 8, w = W - m * 2;
     let y = D.contentTop;
     // The letter hangs in the night sky. Taller phones give it more room, and bring the buttons down to the thumb.

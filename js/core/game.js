@@ -206,6 +206,7 @@ function frame() {
       if (s === top || s.alwaysUpdate) s.update && s.update(dt);
     });
     if (ui.state.toastT > 0) ui.state.toastT -= dt;
+    if (ui.state.flyer) ui.state.flyer.t += dt;
     ui.state.hits.length = 0;
     if (ui.state.debug) {
       ui.state.boxes.length = 0;
@@ -218,6 +219,7 @@ function frame() {
       s.draw();
     });
     ui.state.enabled = true;
+    ui.drawFlyer();
     ui.drawToast();
     drawTransition();
     const before = Date.now();

@@ -12,6 +12,7 @@ const Dispatch = require('../systems/dispatch.js');
 const Garden = require('../systems/garden.js');
 const Wander = require('../systems/wander.js');
 const Daily = require('../systems/daily.js');
+const Quests = require('../systems/quests.js');
 const steps = require('../systems/steps.js');
 const { UI } = require('../core/palette.js');
 
@@ -63,6 +64,7 @@ function altarBusy(s, now) {
 
 function badges(s, now) {
   return {
+    road: Quests.ready(s),
     party: s.coin >= cheapestTier(s) || s.gear.fresh > 0,
     station: stationBusy(s, now),
     trials: trialsBusy(s, now),
