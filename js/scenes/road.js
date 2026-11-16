@@ -25,6 +25,8 @@ const { SkillFx } = require('../core/skillfx.js');
 const Skills = require('../systems/skills.js');
 const Quests = require('../systems/quests.js');
 const Finds = require('../systems/finds.js');
+const Rally = require('../systems/rally.js');
+const SignIn = require('../systems/signin.js');
 const { UI } = require('../core/palette.js');
 const { TIPS } = require('../data/story.js');
 
@@ -42,6 +44,7 @@ const QUEST_GO = {
   tower: () => game.go('tower'),
   wander: () => game.go('wander'),
   gacha: () => game.go('gacha', { from: 'trials' }),
+  lore: () => game.go('lore'),
 };
 const LANTERN_SPEED = 13;
 const NODE_NAME = { fight: '遭遇战', elite: '强敌', event: '路遇', chest: '脚力宝箱', boss: '星位' };
@@ -83,6 +86,10 @@ class RoadView {
     this.pulse = 0;
     this.packX = 24;
     this.packY = sceneH + 20;
+    // The player's own hand in the fight: a run toward the next foes, and blows that land in a row.
+    this.hurry = 0;
+    this.combo = 0;
+    this.comboT = 0;
   }
   setParty(s) {
     const ids = P.joined(s);
@@ -106,7 +113,11 @@ class RoadView {
     this.state = 'closing';
   }
   update(dt, lv) {
-    const speed = WALK_SPEED * this.pace;
+    const rush = this.hurry > 0 ? 5 : 1;
+    const speed = WALK_SPEED * this.pace * rush;
+    this.hurry = Math.max(0, this.hurry - dt);
+    this.comboT = Math.max(0, this.comboT - dt);
+    if (this.comboT <= 0) this.combo = 0;
     this.fx.update(dt);
     this.sk.update(dt);
     this.weather.update(dt);
@@ -140,13 +151,13 @@ class RoadView {
     if (this.state === 'walk' || this.state === 'closing') {
       // The party faces left, the way a handscroll unrolls, so the world slides past to the right.
       this.x += speed * dt;
-      if (this.pace > 1.2 && Math.random() < dt * 22) {
+      if ((this.pace > 1.2 || rush > 1) && Math.random() < dt * 22) {
         const h = this.heroes[Math.floor(Math.random() * this.heroes.length)];
         if (h) this.fx.add({ x: h.x + 8, y: this.fy + h.dy - 1, vx: 30, vy: -8 - Math.random() * 8, life: 0.45, c: '#d9c9a3', s: Math.random() > 0.6 ? 2 : 1 });
       }
     }
     if (this.state === 'walk') {
-      this.timer -= dt * Math.min(2, this.pace);
+      this.timer -= dt * Math.min(2, this.pace) * rush;
       if (this.timer <= 0 && this.pool.length && this.heroes.length) this.spawn(lv);
     } else if (this.state === 'closing') {
       this.foes.forEach((f) => { f.x += speed * dt; });
@@ -191,10 +202,55 @@ class RoadView {
       this.sound('hit');
       return;
     }
-    const h = this.heroes[this.turn++ % this.heroes.length];
-    const t = live[Math.floor(Math.random() * live.length)];
+    this.blow(this.heroes[this.turn++ % this.heroes.length], live[Math.floor(Math.random() * live.length)], Math.random() < 0.15, false);
+  }
+  // A tap on the scene. In a fight it lands a blow on the nearest foe and returns true. On the open road
+  // there is nothing to hit yet, so the party breaks into a run toward whatever comes next.
+  tap(x, y) {
+    if (!this.heroes.length) return false;
+    const live = this.state === 'fight' ? this.foes.filter((f) => f.hits > 0) : [];
+    if (!live.length) {
+      if (this.state !== 'fight') this.hurry = 0.7;
+      return false;
+    }
+    let t = live[0], best = Infinity;
+    live.forEach((f) => {
+      const d = Math.abs(f.x - x) + Math.abs(this.fy + f.dy - 20 - y) * 0.5;
+      if (d < best) {
+        best = d;
+        t = f;
+      }
+    });
+    this.combo = this.comboT > 0 ? this.combo + 1 : 1;
+    this.comboT = 1.6;
+    // Blows in a row find the weak spot more often.
+    this.blow(this.heroes[this.turn++ % this.heroes.length], t, Math.random() < Math.min(0.5, 0.12 + this.combo * 0.02), true);
+    // The party's own next blow waits a beat, so the two don't land on top of each other.
+    this.hit = Math.max(this.hit, 0.3);
+    return true;
+  }
+  // 一鼓作气: the whole party charges, and whatever stands in the road is swept off it.
+  charge() {
+    this.foes.forEach((f) => {
+      if (f.hits <= 0) return;
+      f.hits = 0;
+      this.fx.burst(f.x, this.fy + f.dy - 22, f.m.el, 18, 90);
+    });
+    this.heroes.forEach((h, i) => {
+      h.pose = h.id === 'ruo' ? 'cast' : 'thrust';
+      h.poseT = 0.5;
+      h.ox = -22;
+      this.fx.burst(h.x, this.fy + h.dy - 24, 'star', 14, 80);
+      for (let k = 0; k < 3; k++) {
+        this.coins.push({ t: -(i * 3 + k) * 0.04, dur: 0.7 + k * 0.05, x0: h.x + (Math.random() - 0.5) * 16, y0: this.fy + h.dy - 30, x: h.x, y: this.fy, icon: k === 2 ? 'xp' : 'coin' });
+      }
+    });
+    this.shake = 6;
+    this.hurry = 2.2;
+    this.combo = 0;
+  }
+  blow(h, t, crit, byHand) {
     const center = { x: t.x + t.ox, y: this.fy + t.dy - 22 };
-    const crit = Math.random() < 0.15;
     t.flash = 1;
     t.ox = -5;
     t.hits -= crit ? 2 : 1;
@@ -217,11 +273,16 @@ class RoadView {
       this.sk.impact('slash', tier, from, center, ground, 'metal');
     }
     h.poseT = 0.26;
-    this.sound(crit ? 'crit' : 'hit');
+    if (byHand) {
+      audio.sfx(crit ? 'crit' : 'hit');
+      if (crit) audio.buzz('light');
+      this.shake = Math.max(this.shake, crit ? 4 : 2);
+    } else this.sound(crit ? 'crit' : 'hit');
     this.pops.push({ x: center.x, y: center.y - 14, t: 0, text: String(Math.round(h.atk * (crit ? 2.2 : 1.2) * (0.85 + Math.random() * 0.3))), color: crit ? '#f7dd7a' : '#ffffff', k: crit ? 2 : 1 });
     if (t.hits <= 0) {
       this.fx.burst(center.x, center.y, t.m.el, 20, 80);
-      this.sound('ko');
+      if (byHand) audio.sfx('ko');
+      else this.sound('ko');
       for (let i = 0; i < 4; i++) {
         this.coins.push({ t: -i * 0.05 + 0.05, dur: 0.6 + i * 0.05, x0: center.x + (Math.random() - 0.5) * 14, y0: center.y, x: center.x, y: center.y, icon: i === 3 ? 'xp' : 'coin' });
       }
@@ -287,6 +348,11 @@ class RoadView {
       ui.numberBig(p.text, p.x, p.y, p.color, p.k);
       ui.alpha(1);
     });
+    if (this.combo >= 3) {
+      ui.alpha(Math.min(1, this.comboT * 2.5));
+      ui.text(`连击 ${this.combo}`, W * 0.2, this.fy - 82 - Math.round(Math.max(0, this.comboT - 1.45) * 30), this.combo >= 10 ? '#f7dd7a' : '#ffffff', { align: 'c', outline: true });
+      ui.alpha(1);
+    }
     ui.endClip();
     this.coins.forEach((c) => { if (c.t > 0) ui.img(art.icon(c.icon), c.x - 8, c.y - 8); });
   }
@@ -307,6 +373,7 @@ class Road {
     this.forecastKey = '';
     this.lantern = null;
     this.lanternIn = 8 + Math.random() * 6;
+    this.gaugeFlash = 0;
   }
   syncView(s) {
     const ci = Idle.currentChapterIndex(s);
@@ -364,6 +431,7 @@ class Road {
     const p = s.idle.pack;
     const rows = [{ icon: 'clock', label: '离开了', value: ui.dur(a.secs), valueColor: UI.text }];
     if (a.cleared) rows.push({ icon: 'sword', label: '路上通过', value: `${a.cleared} 站`, valueColor: UI.jade });
+    if (a.kills) rows.push({ icon: 'lore', label: '击退妖怪', value: `${ui.num(a.kills)} 只`, valueColor: UI.peach });
     rows.push({ icon: 'coin', label: '铜钱', value: '+' + ui.num(p.coin) });
     rows.push({ icon: 'xp', label: '阅历', value: '+' + ui.num(p.xp), valueColor: UI.jade });
     const spirits = Object.keys(p.spirits).reduce((n, k) => n + p.spirits[k], 0);
@@ -407,6 +475,45 @@ class Road {
     }
     if (!this.banner && this.bannerQ.length) this.banner = { text: this.bannerQ.shift(), t: 1.6 };
     this.updateLantern(s, dt, now);
+    this.gaugeFlash = Math.max(0, this.gaugeFlash - dt * 4);
+  }
+  // A tap on the scene joins the fight, and blows that land build toward a charge.
+  onTapAnywhere(x, y) {
+    if (y >= this.sceneH || y < D.contentTop + 52) return;
+    if (!this.view.tap(x, y)) return;
+    const s = store.get();
+    const r = Rally.strike(s, clock.now());
+    this.gaugeFlash = 1;
+    if (!r.burst) return;
+    store.persist();
+    audio.sfx('level');
+    audio.buzz('medium');
+    this.view.charge();
+    this.bannerQ.unshift(`一鼓作气 · 铜钱 +${ui.num(r.burst.coin)} 阅历 +${ui.num(r.burst.xp)}`);
+    this.banner = null;
+  }
+  signIn() {
+    game.push('signin', { onClaim: () => this.view.burstAt(W / 2, this.sceneH - 40) });
+  }
+  // 气势, and the day's gift, on the right of the row under the route.
+  drawRally(s, y, now) {
+    const day = Idle.dayOf(now);
+    const fresh = SignIn.ready(s, day);
+    ui.button('road-signin', W - 30, y - 7, 25, 21, { icon: 'chest', kind: fresh ? 'primary' : 'normal', badge: fresh, onTap: () => this.signIn() });
+    const r = Rally.ensure(s, day);
+    const spent = Rally.left(s, day) <= 0;
+    const bw = 48, bx = W - 36 - bw;
+    const label = '气势';
+    ui.text(label, bx - 4, y, spent ? UI.dim : UI.peach, { align: 'r', outline: true });
+    ui.bar(bx, y + 2, bw, 7, spent ? 0 : r.charge / Rally.NEED, this.gaugeFlash > 0.5 ? '#fff2c8' : '#ec7a4e');
+    // One pip for each charge still to be had today.
+    for (let i = 0; i < Rally.PER_DAY; i++) {
+      ui.rect(bx + 1 + i * 8, y + 10, 6, 2, i < Rally.left(s, day) ? '#f7dd7a' : '#3a3350');
+    }
+    // Until the first blow has been landed, the scene says that it can be touched.
+    if (!r.total && this.view.state === 'fight' && Math.floor(game.t * 2) % 3) {
+      ui.text('点一点,上前助阵', W * 0.22, this.view.fy - 84, UI.gold, { align: 'c', outline: true });
+    }
   }
   // A sky lantern drifts across now and then, for whoever happens to be watching.
   updateLantern(s, dt, now) {
@@ -657,6 +764,7 @@ class Road {
       ui.img(art.icon('boot'), bx, by - 3);
       ui.text(`+${Math.round(r.stride * 100)}%`, bx + 17, by, UI.jade, { outline: true });
     }
+    this.drawRally(s, by, now);
   }
   drawPack(s, y, now) {
     const m = 5, w = W - m * 2, h = 50;

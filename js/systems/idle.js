@@ -10,6 +10,7 @@ const E = require('./economy.js');
 const P = require('./party.js');
 const L = require('./ledger.js');
 const Gear = require('./gear.js');
+const Lore = require('./lore.js');
 const { Battle } = require('./battle.js');
 const { CHAPTERS, NODE_INDEX, FLAT } = require('../data/chapters.js');
 
@@ -106,12 +107,15 @@ function multipliers(s, now) {
   const fortune = s.blessings.fortune * 0.02;
   const meal = s.idle.mealSecs > 0 && s.idle.meal ? W.MEALS[s.idle.meal] : null;
   const gear = Gear.partyBonus(s).income;
+  // 见闻 written down in the record of creatures (systems/lore.js).
+  const lore = Lore.bonus(s);
   return {
     stride,
     meal,
     gear,
-    coin: 1 + stride + fortune + gear + ((meal && meal.coin) || 0),
-    xp: 1 + stride + fortune + gear + ((meal && meal.xp) || 0),
+    lore,
+    coin: 1 + stride + fortune + gear + lore + ((meal && meal.coin) || 0),
+    xp: 1 + stride + fortune + gear + lore + ((meal && meal.xp) || 0),
     march: 1 + stride + s.blessings.stride * 0.03 + ((meal && meal.march) || 0),
     spirit: 1 + ((meal && meal.spirit) || 0),
     haste: s.idle.hasteSecs > 0 ? 2 : 1,
@@ -203,6 +207,8 @@ function accrue(s, secs, r, rng) {
   c.item += ITEMS_PER_HOUR * hours;
   c.herb += HERBS_PER_HOUR * hours;
   const ci = Math.min(currentChapterIndex(s), CHAPTERS.length - 1);
+  // The fights between stops are counted for the record of creatures.
+  Lore.accrue(s, hours, poolFor(ci));
   while (c.spirit >= 1) {
     c.spirit -= 1;
     addToPack(s, { spirits: [pick(poolFor(ci), rng)] });
@@ -244,7 +250,7 @@ function arriveFight(s, node, rng) {
   const res = simulate(s, node.foes, node.lv, rng);
   if (res.win) {
     addToPack(s, E.nodeRewards(s, res.enemies, node.id));
-    res.enemies.forEach((e) => { s.codex.monsters[e.id] = true; });
+    Lore.noteUnits(s, res.enemies);
     E.clearNode(s, node.id);
     s.idle.blocked = null;
     s.idle.wait = 0;
@@ -265,6 +271,7 @@ function lapFight(s, rng) {
   const res = simulate(s, node.foes, lv, rng);
   if (res.win) {
     const list = fightNodes();
+    Lore.noteUnits(s, res.enemies);
     s.progress.lapAt++;
     if (s.progress.lapAt >= list.length) {
       s.progress.lapAt = 0;

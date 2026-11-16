@@ -24,6 +24,7 @@ require('./scenes/skills.js');
 require('./scenes/gear.js');
 require('./scenes/gacha.js');
 require('./scenes/ending.js');
+require('./scenes/extras.js');
 
 store.load();
 audio.setup();
@@ -94,10 +95,12 @@ function welcomeBack() {
     return;
   }
   const clearedBefore = Object.keys(s.progress.cleared).length;
+  const drivenOff = () => Object.keys(s.codex.kills || {}).reduce((n, k) => n + s.codex.kills[k], 0);
+  const killsBefore = drivenOff();
   const away = (clock.now() - s.idle.last) / 1000;
   const secs = syncIdle();
   if (away >= 300 && secs > 0) {
-    game.away = { secs: away, full: s.idle.secs >= Idle.capSecs(s), cleared: Object.keys(s.progress.cleared).length - clearedBefore };
+    game.away = { secs: away, full: s.idle.secs >= Idle.capSecs(s), cleared: Object.keys(s.progress.cleared).length - clearedBefore, kills: drivenOff() - killsBefore };
   }
   store.persist();
 }
@@ -159,5 +162,6 @@ if (typeof GameGlobal !== 'undefined' && GameGlobal.__PREVIEW__) {
   GameGlobal.__BUXU__ = {
     game, store, steps, clock, audio, idle: Idle, art, display: D, chapters: require('./data/chapters.js'), ui: require('./core/ui.js'), font: require('./core/font.js'),
     party: require('./systems/party.js'), skills: require('./systems/skills.js'), gear: require('./systems/gear.js'), gacha: require('./systems/gacha.js'), gearData: require('./data/gear.js'), quests: require('./systems/quests.js'),
+    lore: require('./systems/lore.js'), rally: require('./systems/rally.js'), signin: require('./systems/signin.js'),
   };
 }
