@@ -2864,6 +2864,9 @@ test('every skill in the game has an animation signature', () => {
 const Quests = require('../js/systems/quests.js');
 const Finds = require('../js/systems/finds.js');
 const Chores = require('../js/systems/chores.js');
+const Lore = require('../js/systems/lore.js');
+const Rally = require('../js/systems/rally.js');
+const SignIn = require('../js/systems/signin.js');
 
 test('goals come one at a time, pay once, and the first is the first fight', () => {
   const s = E.defaultSave();
@@ -2905,6 +2908,8 @@ test('a save from before goals existed catches up in one tap, at the old prices'
   clearUpToRaw(up, 'c2b');
   strongParty(up, 20, 10);
   up.quest.count = { collect: 5, dispatch: 2, gear: 5, garden: 4, wander: 5 };
+  up.rally.total = 12;
+  up.codex.lore = { vine: 1 };
   up.relicSeq = 1;
   up.gacha.total = 20;
   up.heroes.cen.skillLv = { cut: 3 };
@@ -2958,6 +2963,9 @@ test('a finished game has met every goal up to the ending', () => {
   Quests.ensure(r.s);
   // The simulated player does not mark errands, so stand in for the things it certainly did.
   r.s.quest.count = { collect: 99, dispatch: 99, gear: 99, garden: 99, wander: 99 };
+  // Nor does it tap the road or open the record of creatures, though its march filled every page of it.
+  r.s.rally = { day: 0, n: 0, charge: 0, total: 99, bursts: 9 };
+  assert.ok(Lore.claimAll(r.s).n >= 30, 'a whole journey fills the record');
   Quests.claim(r.s);
   const c = Quests.current(r.s);
   const at = c ? c.index : Quests.QUESTS.length;
@@ -3016,6 +3024,158 @@ test('one tap at the station collects everything finished, and sows the picked p
   assert.strictEqual(s.relics.length, 1);
   assert.strictEqual(Chores.pending(s, later), 0);
   assert.strictEqual(Chores.tidy(s, later).n, 0, 'a second tap finds nothing');
+});
+
+// ---- The record of creatures, joining the fight, and the sign-in sheet ----
+test('the record of creatures counts the march without dice, and a mark pays only once written down', () => {
+  const s = E.defaultSave();
+  s.flags.intro = true;
+  const now = NOW * 1000;
+  s.idle.last = now;
+  // Dice that would throw if the count touched them, beyond what the march already rolled before.
+  const before = E.defaultSave();
+  before.idle.last = now;
+  const rngA = seeded(9), rngB = seeded(9);
+  Idle.sync(s, now + 2 * 3600000, rngA);
+  const pool = Idle.poolFor(0);
+  const total = pool.reduce((n, id) => n + (s.codex.kills[id] || 0), 0);
+  assert.ok(Math.abs(total - Lore.KILLS_PER_HOUR * 2) <= 2, `two hours counted ${total}`);
+  const counts = pool.map((id) => s.codex.kills[id] || 0);
+  assert.ok(Math.max(...counts) - Math.min(...counts) <= 1, 'dealt out in turn');
+  assert.strictEqual(rngA(), (Idle.sync(before, now + 2 * 3600000, rngB), rngB()), 'the count uses none of the march\'s dice');
+  // Reached, but nothing changes until it is written down.
+  const e = Lore.entry(s, pool[0]);
+  assert.strictEqual(e.reached, 1);
+  assert.strictEqual(e.got, 0);
+  assert.strictEqual(e.note, null);
+  assert.strictEqual(Lore.points(s), 0);
+  assert.strictEqual(Idle.multipliers(s, now).coin, 1);
+  assert.ok(Lore.ready(s) >= pool.length - 1);
+  const dust = s.stardust;
+  const got = Lore.claim(s, pool[0]);
+  assert.deepStrictEqual(got, { n: 1, dust: Lore.DUST[0] });
+  assert.strictEqual(s.stardust, dust + Lore.DUST[0]);
+  assert.strictEqual(Lore.claim(s, pool[0]).n, 0, 'a second tap pays nothing');
+  assert.ok(Lore.entry(s, pool[0]).note, 'and the creature\'s line is shown');
+  assert.strictEqual(Idle.multipliers(s, now).coin, 1 + Lore.PER_POINT);
+  assert.strictEqual(Idle.multipliers(s, now).xp, 1 + Lore.PER_POINT);
+  const all = Lore.claimAll(s);
+  assert.strictEqual(Lore.points(s), 1 + all.n);
+  assert.strictEqual(Lore.ready(s), 0);
+});
+
+test('every creature on the road has a page, a line and three marks, and the whole record is a modest bonus', () => {
+  const onRoad = new Set();
+  CHAPTERS.forEach((c) => c.nodes.forEach((n) => (n.foes || []).forEach((id) => onRoad.add(id))));
+  assert.deepStrictEqual(Lore.ORDER.slice().sort(), Array.from(onRoad).sort());
+  Lore.ORDER.forEach((id) => {
+    assert.ok(Lore.NOTES[id] && Lore.NOTES[id].length <= 24, `${id} needs a short line`);
+    const need = Lore.needOf(id);
+    assert.strictEqual(need.length, 3);
+    assert.ok(need[0] < need[1] && need[1] < need[2]);
+  });
+  assert.strictEqual(Lore.TOTAL, Lore.ORDER.length * 3);
+  assert.ok(Lore.TOTAL * Lore.PER_POINT <= 0.25, 'the whole record adds no more than a quarter to the road');
+  // A boss is counted when it is beaten by hand, and a hand-played win counts everything in it.
+  const s = E.defaultSave();
+  E.battleRewards(s, [P.enemyUnit('vineMother', 6, 0), P.enemyUnit('vine', 6, 1)], 'c1h', TODAY);
+  assert.strictEqual(s.codex.kills.vineMother, 1);
+  assert.strictEqual(s.codex.kills.vine, 1);
+  assert.strictEqual(Lore.entry(s, 'vineMother').reached, 1, 'one win is a boss\'s first mark');
+  assert.strictEqual(Lore.entry(s, 'vine').reached, 0);
+  assert.strictEqual(Lore.entry(s, 'crow').known, false);
+  // The record costs nothing and looks at no steps.
+  const src = fs.readFileSync(path.join(ROOT, 'js/systems/lore.js'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  assert.ok(!/steps|spendDust|canAfford/.test(src));
+});
+
+test('a save from before the record existed is credited with the road it has already walked', () => {
+  const s = E.defaultSave();
+  clearUpToRaw(s, 'c2b');
+  s.progress.chapter = 1;
+  s.idle.total = 40 * 3600;
+  delete s.codex.kills;
+  delete s.codex.lore;
+  delete s.rally;
+  delete s.signin;
+  const up = E.upgrade(JSON.parse(JSON.stringify(s)));
+  assert.deepStrictEqual(up.rally, { day: 0, n: 0, charge: 0, total: 0, bursts: 0 });
+  assert.deepStrictEqual(up.signin, { day: 0, n: 0 });
+  assert.strictEqual(up.codex.kills.vineMother, 1, 'the boss it beat');
+  assert.strictEqual(up.codex.kills.crow, undefined, 'and not the one it has not');
+  assert.ok(up.codex.kills.vine >= 300 && up.codex.kills.firerat >= 300, 'forty hours on two regions');
+  assert.strictEqual(up.codex.kills.clay, undefined, 'nothing from a region it has not reached');
+  const total = Object.keys(up.codex.kills).reduce((n, k) => n + up.codex.kills[k], 0);
+  assert.ok(total <= 40 * Lore.KILLS_PER_HOUR + 7, 'no more than its hours would have counted');
+  assert.strictEqual(Lore.points(up), 0, 'the marks still wait to be written down');
+  const again = E.upgrade(JSON.parse(JSON.stringify(up)));
+  assert.deepStrictEqual(again.codex.kills, up.codex.kills, 'and it is only credited once');
+});
+
+test('joining the fight builds a charge that pays into the pack, a fixed number of times a day', () => {
+  const s = E.defaultSave();
+  const now = NOW * 1000;
+  const day = Idle.dayOf(now);
+  let bursts = 0, coin = 0;
+  for (let i = 0; i < Rally.NEED * (Rally.PER_DAY + 3); i++) {
+    const r = Rally.strike(s, now);
+    if (r.burst) {
+      bursts++;
+      coin += r.burst.coin;
+      assert.strictEqual((i + 1) % Rally.NEED, 0, 'only a full measure sets it off');
+    }
+  }
+  assert.strictEqual(bursts, Rally.PER_DAY);
+  assert.strictEqual(Rally.left(s, day), 0);
+  assert.strictEqual(s.rally.total, Rally.NEED * (Rally.PER_DAY + 3), 'blows past the limit still count as blows');
+  assert.strictEqual(s.rally.charge, 0, 'but build nothing');
+  assert.strictEqual(s.coin, 0, 'it waits in the pack like everything else from the road');
+  assert.strictEqual(s.stardust, 0);
+  assert.strictEqual(Math.round(s.idle.pack.coin), coin);
+  // A day of it is worth under half an hour of the road.
+  assert.ok(coin <= G.coinPerMin(1) * 30);
+  assert.ok(Rally.MINS * Rally.PER_DAY <= 30);
+  // A measure half built carries over to tomorrow, and tomorrow has its own charges.
+  const t = E.defaultSave();
+  for (let i = 0; i < 10; i++) Rally.strike(t, now);
+  assert.strictEqual(Rally.left(t, day + 1), Rally.PER_DAY);
+  assert.strictEqual(t.rally.charge, 10);
+  assert.strictEqual(Rally.left(s, day + 1), Rally.PER_DAY);
+});
+
+test('the sign-in sheet gives one gift a day, seven in a round, and a missed day costs nothing', () => {
+  const s = E.defaultSave();
+  assert.ok(SignIn.ready(s, TODAY));
+  const first = SignIn.claim(s, TODAY);
+  assert.strictEqual(first.slot, 0);
+  assert.strictEqual(s.stardust, SignIn.DAYS[0].dust);
+  assert.strictEqual(SignIn.claim(s, TODAY), null, 'once a day');
+  assert.strictEqual(SignIn.claim(s, TODAY - 1), null, 'and a clock moved back cannot take another');
+  assert.strictEqual(s.signin.n, 1);
+  // Five days away: the round is where it was left.
+  assert.strictEqual(SignIn.slot(s), 1);
+  const second = SignIn.claim(s, TODAY + 5);
+  assert.strictEqual(second.slot, 1);
+  assert.ok(second.coin > 0 && second.coin <= G.coinPerMin(1) * 31, 'half an hour of the road');
+  // Before the draw opens, a star letter comes as Stardust instead, so nothing is handed over unusable.
+  const third = SignIn.claim(s, TODAY + 6);
+  assert.strictEqual(third.tickets, 0);
+  assert.strictEqual(third.dust, 40);
+  assert.strictEqual(s.gacha.tickets, 0);
+  // With the draw open, the rest of the round and the start of the next.
+  clearUpTo(s, 'c1h');
+  const tickets = s.gacha.tickets;
+  let got = 0;
+  for (let d = 7; d <= 10; d++) got += SignIn.claim(s, TODAY + d).tickets;
+  assert.strictEqual(got, 5);
+  assert.strictEqual(s.gacha.tickets, tickets + 5);
+  assert.strictEqual(s.signin.n, 7);
+  assert.strictEqual(SignIn.slot(s), 0, 'and round again');
+  assert.strictEqual(SignIn.claim(s, TODAY + 11).slot, 0);
+  // A whole round is a modest wage beside the daily errands: under 60 Stardust and one letter a day.
+  const round = SignIn.DAYS.reduce((a, d) => ({ dust: a.dust + (d.dust || 0), tickets: a.tickets + (d.tickets || 0) }), { dust: 0, tickets: 0 });
+  assert.ok(round.dust <= 7 * 60 && round.tickets <= 7, JSON.stringify(round));
+  Object.keys(SignIn.DAYS[4].items).concat(Object.keys(SignIn.DAYS[6].items)).forEach((k) => assert.ok(G.ITEMS[k], k));
 });
 
 // ---- Runner ----

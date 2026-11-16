@@ -13,6 +13,8 @@ const Garden = require('../systems/garden.js');
 const Wander = require('../systems/wander.js');
 const Daily = require('../systems/daily.js');
 const Quests = require('../systems/quests.js');
+const Lore = require('../systems/lore.js');
+const SignIn = require('../systems/signin.js');
 const steps = require('../systems/steps.js');
 const { UI } = require('../core/palette.js');
 
@@ -50,6 +52,7 @@ function stationBusy(s, now) {
 function trialsBusy(s, now) {
   const day = Idle.dayOf(now);
   if (Daily.pending(s, day)) return true;
+  if (Lore.ready(s) > 0) return true;
   if (E.unlocked(s, 'gacha') && s.gacha.tickets > 0) return true;
   if (!E.unlocked(s, 'wander')) return false;
   Wander.regen(s, now);
@@ -64,7 +67,7 @@ function altarBusy(s, now) {
 
 function badges(s, now) {
   return {
-    road: Quests.ready(s),
+    road: Quests.ready(s) || SignIn.ready(s, Idle.dayOf(now)),
     party: s.coin >= cheapestTier(s) || s.gear.fresh > 0,
     station: stationBusy(s, now),
     trials: trialsBusy(s, now),

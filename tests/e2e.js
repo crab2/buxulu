@@ -304,7 +304,18 @@ async function assertOnScreen(d, where) {
     s = await d.state();
     assert.strictEqual(s.quest.at, 2);
     assert.ok(s.coin > paid);
-    // The third asks for training, and its button leads to the party screen.
+    // The third is done on the road itself, so its note has nowhere to send the player.
+    assert.strictEqual((await d.page.evaluate(() => window.__BUXU__.quests.current(window.__BUXU__.store.get()).q.id)), 'rally');
+    await d.tap('road-quest');
+    await d.waitScene('Modal');
+    assert.strictEqual(await d.has('modal-1'), false);
+    await d.tap('modal-0');
+    await d.waitScene('Road');
+    await d.page.evaluate(() => { window.__BUXU__.store.get().rally.total = 10; });
+    await d.page.waitForTimeout(80);
+    await d.tap('road-quest');
+    assert.strictEqual((await d.state()).quest.at, 3);
+    // The fourth asks for training, and its button leads to the party screen.
     await d.tap('road-quest');
     await d.waitScene('Modal');
     await d.tap('modal-1');
@@ -1343,6 +1354,87 @@ async function assertOnScreen(d, where) {
     await d.ctx.close();
   });
 
+  await check('the road answers a tap: blows build a charge, and the day has a gift and a record to keep', async () => {
+    const d = await open(browser, { speed: 3 });
+    await prepare(d, `${OPEN_ALL}; s.idle.pack = { coin: 0, xp: 0, dust: 0, items: {}, spirits: {}, herbs: {}, gear: [], iron: 0, tickets: 0 }; s.stardust = 0;`);
+    await go(d, 'road');
+    await d.waitScene('Road');
+    // Somewhere on the open scene, away from every button.
+    const spot = await d.page.evaluate(() => {
+      const B = window.__BUXU__, t = B.game.top();
+      const c = window.document.getElementById('game').getBoundingClientRect();
+      const k = c.width / B.ui.W;
+      return { x: c.left + B.ui.W * 0.25 * k, y: c.top + (t.view.fy - 20) * k };
+    });
+    const tapScene = async () => {
+      await d.page.mouse.move(spot.x, spot.y);
+      await d.page.mouse.down();
+      await d.page.waitForTimeout(15);
+      await d.page.mouse.up();
+      await d.page.waitForTimeout(25);
+    };
+    // On the open road a tap lands nothing. It only hurries the party toward the next fight.
+    await d.page.evaluate(() => { const v = window.__BUXU__.game.top().view; v.foes = []; v.state = 'walk'; v.timer = 99; });
+    await tapScene();
+    assert.strictEqual((await d.state()).rally.total, 0, 'nothing to hit, nothing counted');
+    assert.ok(await d.page.evaluate(() => window.__BUXU__.game.top().view.hurry > 0), 'the party breaks into a run');
+    const need = await d.page.evaluate(() => window.__BUXU__.rally.NEED);
+    const before = (await d.state()).idle.pack.coin;
+    const t0 = Date.now();
+    let landed = 0;
+    while (Date.now() - t0 < 60000) {
+      await tapScene();
+      const r = (await d.state()).rally;
+      landed = r.total;
+      if (r.bursts) break;
+    }
+    const s1 = await d.state();
+    assert.strictEqual(s1.rally.bursts, 1, `a full measure sets off the charge (${landed} blows landed)`);
+    assert.strictEqual(landed, need, 'after exactly as many blows as the measure holds');
+    assert.strictEqual(s1.rally.charge, 0);
+    const paid = await d.page.evaluate(() => {
+      const B = window.__BUXU__, s = B.store.get();
+      return Math.round(140 * Math.pow(1.03, B.idle.rates(s, B.clock.now()).lv) * B.rally.MINS);
+    });
+    assert.ok(s1.idle.pack.coin - before >= paid, 'and its coins are in the pack');
+    assert.strictEqual(s1.coin, 0, 'not in the purse until the pack is collected');
+    await assertTidy(d, 'road, after a charge');
+    await shot(d, 'rally');
+    // The day's gift.
+    await d.tap('road-signin');
+    await d.waitScene('SignInScene');
+    await d.tap('signin-claim');
+    await d.page.waitForTimeout(100);
+    const s2 = await d.state();
+    assert.strictEqual(s2.signin.n, 1);
+    assert.strictEqual(s2.stardust, 50, 'the first day pays its Stardust');
+    assert.strictEqual(await d.has('signin-claim'), false, 'and cannot be taken twice');
+    await d.tap('signin-close');
+    await d.waitScene('Road');
+    // Time on the road fills the record, and a mark written down raises what the road pays.
+    await skipTime(d, 2 * HOUR);
+    const rate0 = await d.page.evaluate(() => { const B = window.__BUXU__; return B.idle.readout(B.store.get(), B.clock.now()).coin; });
+    await go(d, 'trials');
+    await d.waitScene('Trials');
+    await d.page.evaluate(() => { window.__BUXU__.game.top().scroll = 9999; });
+    await d.tap('trial-lore');
+    await d.waitScene('LoreScene');
+    await shot(d, 'lore');
+    await d.tap('lore-all');
+    await d.page.waitForTimeout(100);
+    const s3 = await d.state();
+    const pts = Object.keys(s3.codex.lore).reduce((n, k) => n + s3.codex.lore[k], 0);
+    assert.ok(pts >= 2, `two hours on the road reach a few first marks (${pts})`);
+    assert.ok(s3.stardust >= 50 + pts * 10);
+    const rate1 = await d.page.evaluate(() => { const B = window.__BUXU__; return B.idle.readout(B.store.get(), B.clock.now()).coin; });
+    assert.ok(Math.abs(rate1 / rate0 - (1 + pts * 0.0025)) < 1e-6, 'each point adds a quarter of a percent');
+    assert.strictEqual(await d.has('lore-all'), false, 'nothing left to write down');
+    await d.tap('back');
+    await d.waitScene('Trials');
+    await d.assertClean();
+    await d.ctx.close();
+  });
+
   const SIZES = [
     ['small-16x9', { width: 360, height: 640 }, 3],
     ['budget-720', { width: 360, height: 800 }, 2],
@@ -1412,6 +1504,21 @@ async function assertOnScreen(d, where) {
       await d.page.evaluate(() => { const B = window.__BUXU__; B.store.get().quest.at = B.quests.QUESTS.length; });
       await d.page.waitForTimeout(120);
       await assertTidy(d, 'road, goals finished');
+      // The sign-in sheet over the road: before the day's gift is taken, after, and with a whole round done.
+      await go(d, 'road');
+      await d.tap('road-signin');
+      await d.waitScene('SignInScene');
+      await assertOnScreen(d, 'sign-in');
+      await assertTidy(d, 'sign-in');
+      await shot(d, `${name}-signin`);
+      await d.tap('signin-claim');
+      await d.page.waitForTimeout(120);
+      await assertTidy(d, 'sign-in, taken');
+      await d.page.evaluate(() => { window.__BUXU__.store.get().signin.n = 7; });
+      await d.page.waitForTimeout(120);
+      await assertTidy(d, 'sign-in, round done');
+      await d.tap('signin-close');
+      await d.waitScene('Road');
       await d.page.evaluate(() => { window.__BUXU__.store.get().garden.plots = [{ el: 'wood', at: 1, doneAt: 2 }]; });
       await visit('station', 'station');
       await visit('party', 'party');
@@ -1429,6 +1536,24 @@ async function assertOnScreen(d, where) {
       await shot(d, `${name}-settings`);
       await d.tap('set-close');
       await visit('trials', 'trials');
+      // The record of creatures with every kind of row: written down, waiting, barely met and never met.
+      await d.page.evaluate(() => {
+        const s = window.__BUXU__.store.get();
+        s.codex.kills = { vine: 123456, floral: 35, xiao: 2100, xiaoKing: 12, vineMother: 10, firerat: 180, pei2: 3 };
+        s.codex.monsters = { vine: 1, floral: 1, xiao: 1, xiaoKing: 1, vineMother: 1, firerat: 1, bifang: 1, pei2: 1 };
+        s.codex.lore = { vine: 3, xiao: 2, vineMother: 1 };
+      });
+      await visit('lore', 'lore');
+      for (const at of [0.25, 0.5, 1]) {
+        await d.page.evaluate((k) => { const t = window.__BUXU__.game.top(); t.scroll = t.maxScroll * k; }, at);
+        await d.page.waitForTimeout(100);
+        await assertTidy(d, 'lore, scrolled ' + at);
+      }
+      await go(d, 'trials');
+      await d.page.evaluate(() => { window.__BUXU__.game.top().scroll = 9999; });
+      await d.page.waitForTimeout(120);
+      await assertOnScreen(d, 'trials, scrolled');
+      await assertTidy(d, 'trials, scrolled');
       await visit('altar', 'altar');
       await visit('dispatch', 'dispatch');
       await visit('garden', 'garden');
@@ -1542,6 +1667,22 @@ async function assertOnScreen(d, where) {
       await go(d, sc);
       await measure(sc);
     }
+    // The record of creatures with every page filled in, and the sign-in sheet over the road.
+    await d.page.evaluate(() => {
+      const B = window.__BUXU__, s = B.store.get();
+      B.lore.ORDER.forEach((id) => { s.codex.kills[id] = 5000; s.codex.monsters[id] = true; });
+    });
+    await go(d, 'lore');
+    await measure('lore, waiting');
+    await d.page.evaluate(() => { const B = window.__BUXU__; B.lore.claimAll(B.store.get()); });
+    await measure('lore, full');
+    await d.page.evaluate(() => { const t = window.__BUXU__.game.top(); t.scroll = t.maxScroll; });
+    await measure('lore, the end');
+    await go(d, 'road');
+    await d.tap('road-signin');
+    await d.waitScene('SignInScene');
+    await measure('sign-in');
+    await d.tap('signin-close');
     // The fullest the new screens get: a bag of every set and rarity, and ten cards face up.
     await d.page.evaluate(() => {
       const B = window.__BUXU__, s = B.store.get(), F = B.gearData;

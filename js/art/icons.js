@@ -295,6 +295,17 @@ const ICONS = {
     g.ell(12, 5, 3, 2, C.jade3);
     return g.outline();
   },
+  // The record of creatures: a bound book with a ribbon.
+  lore() {
+    const g = g16();
+    g.rect(2, 2, 12, 12, C.red2);
+    g.rect(4, 2, 10, 12, C.red);
+    g.rect(13, 3, 1, 11, C.paper2);
+    g.rect(6, 5, 5, 4, C.paper2);
+    g.rect(7, 6, 3, 1, C.ochre2);
+    g.rect(10, 10, 2, 5, C.gold2);
+    return g.outline();
+  },
   quest() {
     const g = g16();
     g.rect(3, 1, 10, 14, C.paper2);

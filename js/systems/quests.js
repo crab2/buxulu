@@ -31,6 +31,7 @@ const topSet = (s) => most(heroes(s), (id) => {
 const relicsWorn = (s) => sum(heroes(s), (id) => s.heroes[id].relics.filter(Boolean).length);
 const planted = (s) => s.garden.plots.filter(Boolean).length;
 const cleared = (id) => (s) => (s.progress.cleared[id] ? 1 : 0);
+const lore = (s) => Object.keys(s.codex.lore || {}).reduce((n, k) => n + s.codex.lore[k], 0);
 const stars = (s) => s.progress.stars;
 
 // lv: the point on the road this goal belongs to, which sizes its coins. mins: minutes of road income.
@@ -38,12 +39,14 @@ const stars = (s) => s.progress.stars;
 const QUESTS = [
   { id: 'first', text: '打赢路上第一仗', lv: 1, mins: 4, go: 'road', now: cleared('c1a'), need: 1 },
   { id: 'collect', text: '收一次行囊', lv: 1, mins: 4, go: 'road', now: (s) => count(s, 'collect'), need: 1 },
+  { id: 'rally', text: '点路上的妖怪,助阵 10 下', lv: 1, mins: 4, go: 'road', now: (s) => (s.rally ? s.rally.total : 0), need: 10 },
   { id: 'train3', text: '修炼 3 次', lv: 2, mins: 6, go: 'party', now: trained, need: 3 },
   { id: 'ruo', text: '往前走,遇见同路人', lv: 2, mins: 6, go: 'road', now: cleared('c1b'), need: 1, items: { pill: 2 } },
   { id: 'send', text: '去驿传派出一封信', lv: 3, mins: 6, go: 'dispatch', open: 'dispatch', now: (s) => count(s, 'dispatch'), need: 1 },
   { id: 'lv5', text: '有人升到 5 级', lv: 4, mins: 8, go: 'road', now: topLevel, need: 5 },
   { id: 'skill2', text: '术法升级 2 次', lv: 4, mins: 8, go: 'skills', now: skillUps, need: 2 },
   { id: 'c1d', text: '走过不谢坡的山魈林', lv: 4, mins: 8, go: 'road', now: cleared('c1d'), need: 1, dust: 20 },
+  { id: 'lore1', text: '在见闻录记下第一笔', lv: 5, mins: 8, go: 'lore', now: lore, need: 1 },
   { id: 'refine', text: '在星炉炼一件法宝', lv: 5, mins: 8, go: 'furnace', open: 'furnace', now: (s) => s.relicSeq + s.furnace.jobs.length, need: 1 },
   { id: 'train10', text: '修炼累计 10 层', lv: 5, mins: 10, go: 'party', now: trained, need: 10 },
   { id: 'star1', text: '点亮第一颗星:天枢', lv: 6, mins: 15, go: 'road', now: stars, need: 1, dust: 50, tickets: 1 },
@@ -58,9 +61,11 @@ const QUESTS = [
   { id: 'lv12', text: '有人升到 12 级', lv: 11, mins: 12, go: 'road', now: topLevel, need: 12 },
   { id: 'send8', text: '累计送到 8 封信', lv: 11, mins: 12, go: 'dispatch', open: 'dispatch', now: (s) => s.dispatch.done, need: 8, dust: 30 },
   { id: 'tower10', text: '登上天阶第 10 阶', lv: 12, mins: 12, go: 'tower', open: 'tower', now: (s) => s.tower.best, need: 10, dust: 30 },
+  { id: 'burst', text: '攒满气势,一鼓作气一回', lv: 12, mins: 12, go: 'road', now: (s) => (s.rally ? s.rally.bursts || 0 : 0), need: 1 },
   { id: 'star2', text: '点亮第二颗星:天璇', lv: 13, mins: 15, go: 'road', now: stars, need: 2, dust: 50, tickets: 1 },
   { id: 'train30', text: '修炼累计 30 层', lv: 14, mins: 12, go: 'party', now: trained, need: 30 },
   { id: 'skill4', text: '把一门术法练到小成', lv: 15, mins: 12, go: 'skills', now: topSkill, need: 4 },
+  { id: 'lore10', text: '见闻攒到 10 点', lv: 16, mins: 12, go: 'lore', now: lore, need: 10, dust: 30 },
   { id: 'relic2', text: '全队佩戴 2 件法宝', lv: 16, mins: 12, go: 'party', open: 'furnace', now: relicsWorn, need: 2 },
   { id: 'gearlv10', text: '把一件行装强化到 10 级', lv: 17, mins: 12, go: 'party', open: 'gear', now: topGearLv, need: 10, dust: 30 },
   { id: 'star3', text: '点亮第三颗星:天玑', lv: 20, mins: 15, go: 'road', now: stars, need: 3, dust: 60, tickets: 1 },
@@ -68,6 +73,7 @@ const QUESTS = [
   { id: 'tower20', text: '登上天阶第 20 阶', lv: 23, mins: 12, go: 'tower', open: 'tower', now: (s) => s.tower.best, need: 20, dust: 40 },
   { id: 'set4', text: '给一个人凑齐同名四件', lv: 25, mins: 15, go: 'party', open: 'gear', now: topSet, need: 4, dust: 40 },
   { id: 'star4', text: '点亮第四颗星:天权', lv: 28, mins: 15, go: 'road', now: stars, need: 4, dust: 60, tickets: 1 },
+  { id: 'lore30', text: '见闻攒到 30 点', lv: 30, mins: 15, go: 'lore', now: lore, need: 30, dust: 50, tickets: 1 },
   { id: 'lv30', text: '有人升到 30 级', lv: 30, mins: 12, go: 'road', now: topLevel, need: 30 },
   { id: 'skill7', text: '把一门术法练到大成', lv: 31, mins: 15, go: 'skills', now: topSkill, need: 7 },
   { id: 'train80', text: '修炼累计 80 层', lv: 33, mins: 15, go: 'party', now: trained, need: 80 },

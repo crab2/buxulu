@@ -15,6 +15,7 @@ const Tower = require('../systems/tower.js');
 const Wander = require('../systems/wander.js');
 const Daily = require('../systems/daily.js');
 const Boosts = require('../systems/boosts.js');
+const Lore = require('../systems/lore.js');
 const steps = require('../systems/steps.js');
 const O = require('./overlays.js');
 const nav = require('./nav.js');
@@ -125,6 +126,14 @@ class Trials {
       },
     });
     y += h + 4;
+    // The record of creatures sits under the day's errands, where it moves nothing a thumb has learned.
+    const marks = Lore.ready(s);
+    card('trial-lore', m, y, w, 62, {
+      icon: 'lore', title: '见闻录',
+      text: marks ? `有 ${marks} 笔见闻等着记下。` : `路上击退的妖都记在这里。见闻 ${Lore.points(s)} 点。`,
+      action: '翻看', kind: marks ? 'primary' : 'normal', badge: marks > 0, onTap: () => game.go('lore'),
+    });
+    y += 66;
     this.maxScroll = Math.max(0, y + 6 + this.scroll - this.bottom);
     this.scroll = Math.min(this.scroll, this.maxScroll);
     ui.endClip();

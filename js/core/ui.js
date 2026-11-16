@@ -271,9 +271,26 @@ function num(n) {
   return (v < 100 ? Math.floor(v * 10) / 10 : Math.floor(v)) + '亿';
 }
 
+// The header's coins and Stardust count up or down to a new figure, so every gain is seen to arrive. A figure
+// that has been off screen for a moment, or that has barely moved, is simply shown.
+const rolling = {};
+function rolled(key, value) {
+  const r = rolling[key];
+  if (!r || state.t - r.at > 0.5 || state.t < r.at || !(Math.abs(value - r.shown) >= 1)) {
+    rolling[key] = { shown: value, at: state.t };
+    return value;
+  }
+  const k = 1 - Math.exp(-(state.t - r.at) * 9);
+  const gap = value - r.shown;
+  r.shown = Math.abs(gap) <= 1 ? value : r.shown + (Math.abs(gap * k) < 1 ? Math.sign(gap) : gap * k);
+  r.at = state.t;
+  return r.shown;
+}
+
 function chip(x, y, value, icon, color) {
-  const s = num(value);
-  const w = font.width(s) + 22;
+  const s = num(rolled(icon, value));
+  // Sized for whichever of the two figures is wider, so nothing beside it shifts while it counts.
+  const w = Math.max(font.width(s), font.width(num(value))) + 22;
   rect(x - w + 1, y, w - 2, 18, UI.ink);
   rect(x - w, y + 1, w, 16, UI.ink);
   rect(x - w + 1, y + 1, w - 2, 16, '#2a2542');

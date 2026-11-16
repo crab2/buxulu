@@ -8,6 +8,7 @@ const D = require('../data/game.js');
 const W = require('../data/world.js');
 const F = require('../data/gear.js');
 const Gear = require('./gear.js');
+const Lore = require('./lore.js');
 const { NODE_INDEX, CHAPTERS } = require('../data/chapters.js');
 
 function defaultSave() {
@@ -24,7 +25,7 @@ function defaultSave() {
     gacha: { tickets: 0, wish: null, sinceTop: 0, sinceRare: 0, total: 0, giftStars: 0, day: 0, boughtCoin: 0, boughtDust: 0 },
     heroes: { cen: hero(true), ruo: hero(false), zhuo: hero(false) },
     progress: { chapter: 0, cleared: {}, stars: 0, ending: null, lap: 0, lapAt: 0 },
-    codex: { recipes: {}, monsters: {} },
+    codex: { recipes: {}, monsters: {}, kills: {}, lore: {} },
     steps: { applied: [], total: 0, welcomed: false, lastView: null },
     flags: { intro: false, seen: {}, tips: {}, stipendDay: 0, replayDay: 0, replays: 0 },
     settings: { bgm: true, sfx: true, vibrate: true, auto: false, speed: 1, smooth: false, keepOn: false },
@@ -32,7 +33,7 @@ function defaultSave() {
       last: 0, secs: 0, total: 0, li: 0, toNext: 0, target: null, wait: 0, blocked: null,
       hasteSecs: 0, meal: null, mealSecs: 0, dashLi: 0,
       pack: { coin: 0, xp: 0, dust: 0, items: {}, spirits: {}, herbs: {}, gear: [], iron: 0, tickets: 0 },
-      carry: { spirit: 0, item: 0, herb: 0, gear: 0, iron: 0, ticket: 0 },
+      carry: { spirit: 0, item: 0, herb: 0, gear: 0, iron: 0, ticket: 0, kill: 0, killAt: 0 },
       log: [],
     },
     dispatch: { active: [], board: [], nextJob: 0, seq: 0, done: 0, rank: {} },
@@ -46,6 +47,8 @@ function defaultSave() {
     letters: { got: [], unread: 0 },
     quest: { at: 0, count: {} },
     finds: { day: 0, n: 0 },
+    rally: { day: 0, n: 0, charge: 0, total: 0, bursts: 0 },
+    signin: { day: 0, n: 0 },
   };
 }
 
@@ -59,7 +62,9 @@ function upgrade(save) {
       else if (b[k] && typeof b[k] === 'object' && !Array.isArray(b[k]) && a[k] && typeof a[k] === 'object') merge(a[k], b[k]);
     });
   };
+  const hadRecord = !!(save.codex && save.codex.kills);
   merge(save, base);
+  if (!hadRecord) Lore.backfill(save);
   if (fromV1) {
     // Training tiers became half as strong and twice as many, so old tiers double to keep their value.
     Object.keys(save.heroes).forEach((id) => {
@@ -218,7 +223,7 @@ function battleRewards(s, enemies, nodeId, day) {
   addDust(s, r.dust);
   const drops = {};
   enemies.forEach((e) => {
-    s.codex.monsters[e.id] = true;
+    Lore.note(s, e.id);
     if (e.def_.boss) return;
     const roll = Math.random();
     if (roll < 0.1) drops.pill = (drops.pill || 0) + 1;

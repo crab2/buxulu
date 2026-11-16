@@ -23,15 +23,18 @@ All code, art, story and music are original. Art is drawn in code, and music is 
 | **云游 Wander** | A dice walk around a 24-stop board with a prize at every stop. Free rolls return with time, and steps add more. | Rolls refill |
 | **日课 Daily errands** | A short checklist that pays Stardust for playing. | Resets daily |
 | **衣橱 Wardrobe** | Outfits, companions that walk with the party, and station decorations. Looks only. | — |
-| **路引 Goals** | One goal at a time on the road screen, 43 in all. It says what is worth doing next, takes you to the screen that does it, and pays a little when it is done. | — |
+| **路引 Goals** | One goal at a time on the road screen, 48 in all. It says what is worth doing next, takes you to the screen that does it, and pays a little when it is done. | — |
 | **天灯 Sky lanterns** | A lantern drifts over the road now and then while you watch. Tap it for a small windfall. Up to 16 a day. | No, they are for whoever is looking |
 | **一键打理 One-tap station** | One button at the station takes in every finished errand, ripe crop and refined relic, and sows the picked plots again with the same crop. | — |
+| **助阵 Joining the fight** | Tap the creatures on the road to land blows yourself. Thirty blows fill 气势 and set off 一鼓作气, a charge that drops four minutes of road income into the pack. Up to 6 a day. | No, it is for whoever is looking |
+| **见闻录 Record of creatures** | Every creature the party drives off is counted. Each has three marks to reach, and writing one down pays Stardust, shows a line about the creature and raises road income by 0.25% for good. | The march keeps counting |
+| **七日签到 Sign-in sheet** | A gift for each day you come by, seven in a round, with the best one last. A missed day costs nothing. | — |
 
 Features open gradually along the road, so the first session is just the march and a couple of fights. After the story ends, the road keeps looping with stronger enemies.
 
 ### Goals, lanterns and the things that make the main screen worth watching
 
-- **路引** is a paper strip above the pack. Each goal reads the save as it is, so anything already done counts, and a save from before goals existed catches up in one tap. A goal pays coins sized by the point on the road it belongs to (4 to 20 minutes of income there), and a few pay Stardust, supplies or star letters. All 43 together come to under 9 hours of road income, so the chain guides and does not carry. No goal costs Stardust or looks at real steps, and a test fails if one starts to. The list is `QUESTS` in `js/systems/quests.js`.
+- **路引** is a paper strip above the pack. Each goal reads the save as it is, so anything already done counts, and a save from before goals existed catches up in one tap. A goal pays coins sized by the point on the road it belongs to (4 to 20 minutes of income there), and a few pay Stardust, supplies or star letters. All 48 together come to under 10 hours of road income, so the chain guides and does not carry. No goal costs Stardust or looks at real steps, and a test fails if one starts to. The list is `QUESTS` in `js/systems/quests.js`.
 - **天灯** come every 50 to 90 seconds while the road screen is open. One holds two minutes of coins and experience at the current rate, or sometimes two herbs, three iron or five Stardust. The catch goes into the pack. A full day of them is worth about half an hour on the road.
 - **The route row** under the header shows the region's stops as a line of pips, with the party's place along it, so "how far to the boss" can be read at a glance.
 - **Income per minute**, coins and experience, is always shown beside 加快脚步, with every bonus counted. A meal and today's walking bonus show as small markers under the route row.
@@ -39,6 +42,16 @@ Features open gradually along the road, so the first session is just the march a
 - **The road tab** shows a dot when a goal is ready to claim.
 
 The balance simulation does not claim goals or catch lanterns, so the published days are for a player who ignores both.
+
+### Something to do with your hands, and something that adds up
+
+These three were added to give the game a short loop measured in seconds and a long one measured in weeks, on either side of the collect-and-train loop it already had. None of them is needed to finish the story, none costs Stardust and none looks at real steps. The simulation ignores all three, so the published days still describe a player who never touches them.
+
+- **助阵.** A tap on the road scene during a fight lands a blow on the nearest creature, with the hero's own animation, a number and a sound. Blows in a row count up as 连击 and crit more often. A tap on the open road makes the party run to the next fight, so there is always something to hit within a second or two. Each blow adds to the 气势 bar under the route row, and the thirtieth sets off 一鼓作气: the party charges, the road is swept clear and four minutes of coins and experience land in the pack. The six pips under the bar are the day's charges, worth 24 minutes of the road in all. After that a tap still joins the fight and builds nothing. The fights on screen remain a picture of the march, so tapping never moves the party along the road. The rules are in `js/systems/rally.js`.
+- **见闻录**, at the foot of the 历练 tab. The march drives off 120 creatures an hour, shared in turn among the region's kinds, and real fights count what fell in them. An ordinary creature's marks are at 30, 300 and 2,000, and a boss's are at 1, 3 and 10 wins, so a boss's later marks come from fighting it again by hand. A mark counts only once it is written down: that pays 10, 20 or 50 Stardust, and the first also shows a line about the creature. There are 30 creatures and 90 marks, and the whole record adds 22.5% to road coins and experience. A creature never met is a question mark. A save from before the record existed is credited with what its hours on the road would have counted. The rules and the lines are in `js/systems/lore.js`.
+- **七日签到**, the chest button on the road screen. The seven gifts are 50 Stardust, half an hour of road coins, a star letter, 80 Stardust, three supplies, two star letters, and then 200 Stardust with three letters and a 还魂香. The round waits where it was left, so the seventh gift is seven visits away however they fall, and nobody is punished for a day off. Before the draw has opened, a letter comes as 40 Stardust instead. A whole round is 330 Stardust and 6 letters. It never opens by itself. The rules are in `js/systems/signin.js`.
+- **Counting figures.** The coins and Stardust in the header count up or down to a new figure and are never just replaced, so every gain is seen to arrive.
+- **你回来了** now also says how many creatures the party drove off while you were away.
 
 ## Run it
 
@@ -326,7 +339,8 @@ js/art/               All sprites and scenery, drawn in code
 js/data/              Skills, monsters, relics, chapters, story script, activity content (world.js),
                       equipment, sets and draw odds (gear.js)
 js/systems/           Rules: idle march, battle, economy, boosts, skill levels, equipment, draw, dispatch, garden,
-                      tower, wander, daily, goals (quests), sky lanterns (finds), one-tap station (chores),
+                      tower, wander, daily, goals (quests), sky lanterns (finds), one-tap station (chores), joining the fight (rally),
+                      record of creatures (lore), sign-in sheet (signin),
                       wardrobe, ledger, steps client, save
 js/scenes/            Screens
 cloudfunctions/       stepExchange and cloudSave
@@ -369,4 +383,5 @@ Everything above ran against a browser stand-in for the WeChat runtime (`tools/w
 - **Music on more phones.** It plays on the one phone tried so far. It had been reported missing because the music switch was off in that phone's save. Coming back after a call hasn't been tried on a phone, and neither has going silent on mute, which is on purpose. "To check the music on a phone" above explains the report to read if it goes missing again.
 - Audio quality. The files decode and aren't silent or clipped, but nobody has listened to them yet.
 - Frame rate and heat on low-end phones. The draw-call and memory figures above are measured in a browser, not on a phone.
+- **Tapping the road on a real phone.** 助阵 has only been driven by a mouse in a browser. How a quick run of taps feels on a touch screen, and whether thirty blows to a charge is too many or too few, needs a thumb. The numbers are `NEED`, `PER_DAY` and `MINS` at the top of `js/systems/rally.js`.
 - Real players. The pacing comes from simulated players, so the numbers will need tuning once people actually play. That goes double for the draw: how it feels, how many letters feel like enough, and whether the set effects are worth building around. The odds and costs all live in `js/data/gear.js`.
